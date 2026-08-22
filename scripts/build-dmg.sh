@@ -4,7 +4,7 @@
 set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-VERSION="${MAILKIT_VERSION:-0.1.0}"
+VERSION="${MAILKIT_VERSION:-0.1.1}"
 VERSION="${VERSION#v}"
 export MAILKIT_VERSION="$VERSION"
 DIST="$ROOT/dist"

@@ -8,9 +8,10 @@ import time
 from pathlib import Path
 
 from mailkit.config import load_config
+from mailkit.errors import DaemonError
 from mailkit.logutil import get_logger
 from mailkit.paths import data_dir
-from mailkit.service import is_running, load_or_create_token, spawn_background
+from mailkit.service import is_running, load_or_create_token, spawn_background, spawn_generation
 
 log = get_logger("mailkit.desktop")
 
@@ -38,8 +39,14 @@ def ensure_engine(root: Path | None = None) -> None:
     home = data_dir(root)
     if is_running(home):
         return
+    if spawn_generation() >= 1:
+        log.error("refusing nested engine spawn from a child process")
+        return
     log.info("starting engine for desktop")
-    spawn_background(home)
+    try:
+        spawn_background(home)
+    except DaemonError as exc:
+        log.warning("engine spawn: %s", exc)
     deadline = time.time() + 8
     while time.time() < deadline:
         if is_running(home):

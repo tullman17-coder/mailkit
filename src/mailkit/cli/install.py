@@ -33,6 +33,7 @@ def unit_text(target: str, root: Path) -> str:
   <key>EnvironmentVariables</key>
   <dict>
     <key>MAILKIT_HOME</key><string>{home}</string>
+    <key>MAILKIT_ROLE</key><string>daemon</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -47,6 +48,7 @@ After=network.target
 [Service]
 Type=simple
 Environment=MAILKIT_HOME={home}
+Environment=MAILKIT_ROLE=daemon
 ExecStart={exec_start}
 Restart=on-failure
 RestartSec=5

@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/tullman17-coder/mailkit/releases/latest"><strong>Download latest release</strong></a>
   ·
-  <a href="https://github.com/tullman17-coder/mailkit/releases/tag/v0.1.0">v0.1.0</a>
+  <a href="https://github.com/tullman17-coder/mailkit/releases/latest">v0.1.1</a>
   ·
   <a href="https://github.com/tullman17-coder/mailkit">source</a>
 </p>
@@ -180,10 +180,12 @@ Build a drag-to-Applications DMG on a Mac:
 
 ```bash
 bash scripts/build-dmg.sh
-# → dist-dmg/Mailkit-0.1.0.dmg
+# → dist-dmg/Mailkit-0.1.1.dmg
 ```
 
-**macOS download:** [Mailkit 0.1.0](https://github.com/tullman17-coder/mailkit/releases/tag/v0.1.0) · always-current: [latest release](https://github.com/tullman17-coder/mailkit/releases/latest)
+**macOS download:** [Mailkit 0.1.1](https://github.com/tullman17-coder/mailkit/releases/latest) · always-current: [latest release](https://github.com/tullman17-coder/mailkit/releases/latest)
+
+Do not run the v0.1.0 Mac app. Opening it spawned copies of itself until the machine locked up. 0.1.1+ treats a spawned child as the engine, never another window.
 
 Push a new tag and the [release workflow](.github/workflows/release.yml) attaches the DMG:
 
