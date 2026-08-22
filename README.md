@@ -6,6 +6,14 @@
 
 <p align="center">Local email engine · CLI · desktop · an entity of <a href="https://zermo.org">zermo.org</a></p>
 
+<p align="center">
+  <a href="https://github.com/tullman17-coder/mailkit/releases/latest"><strong>Download latest release</strong></a>
+  ·
+  <a href="https://github.com/tullman17-coder/mailkit/releases/tag/v0.1.0">v0.1.0</a>
+  ·
+  <a href="https://github.com/tullman17-coder/mailkit">source</a>
+</p>
+
 Mailkit talks **directly** to your existing Gmail, Outlook / Microsoft 365, Yahoo, and custom-domain IMAP/SMTP accounts. It does not host, proxy, or relay mail through a third party. Credentials stay in an encrypted vault on disk.
 
 Mailkit talks **directly** to your existing Gmail, Outlook / Microsoft 365, Yahoo, and custom-domain IMAP/SMTP accounts. It does not host, proxy, or relay mail through a third party. Credentials stay in an encrypted vault on disk.
@@ -174,24 +182,21 @@ bash scripts/build-dmg.sh
 # → dist-dmg/Mailkit-0.1.0.dmg
 ```
 
-Push a tag to GitHub and the [release workflow](.github/workflows/release.yml) attaches the DMG:
+**macOS download:** [Mailkit 0.1.0](https://github.com/tullman17-coder/mailkit/releases/tag/v0.1.0) · always-current: [latest release](https://github.com/tullman17-coder/mailkit/releases/latest)
+
+Push a new tag and the [release workflow](.github/workflows/release.yml) attaches the DMG:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 Unsigned builds need a right-click → Open the first time (Gatekeeper).
 
-## GitHub upload
+## GitHub
 
-```bash
-cd /Users/portal/Projects/mailkit
-git init
-git add .
-git commit -m "Mailkit 0.1.0 — local engine, desktop, doctor"
-gh repo create mailkit --public --source . --push
-```
+Source: [github.com/tullman17-coder/mailkit](https://github.com/tullman17-coder/mailkit)  
+Release (DMG): [github.com/tullman17-coder/mailkit/releases/latest](https://github.com/tullman17-coder/mailkit/releases/latest)
 
 ## Docs
 
