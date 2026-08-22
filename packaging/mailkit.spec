@@ -1,8 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
 
+import os
+
 root = Path(SPECPATH).parent
 icon = root / "desktop" / "brand" / "AppIcon.icns"
+version = os.environ.get("MAILKIT_VERSION", "0.1.0").lstrip("v")
 
 a = Analysis(
     [str(root / "packaging" / "launch_desktop.py")],
@@ -53,8 +56,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Mailkit",
         "CFBundleDisplayName": "Mailkit",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "0.1.0",
+        "CFBundleShortVersionString": version,
+        "CFBundleVersion": version,
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
         "NSHumanReadableCopyright": "Zermo Brands — an entity of zermo.org",
