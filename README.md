@@ -192,7 +192,7 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-Unsigned builds need a right-click → Open the first time (Gatekeeper).
+Releases are **Developer ID signed and notarized**. See [docs/SIGNING.md](docs/SIGNING.md).
 
 ## GitHub
 
