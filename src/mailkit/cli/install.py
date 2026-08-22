@@ -9,6 +9,17 @@ from pathlib import Path
 def unit_text(target: str, root: Path) -> str:
     exe = sys.executable
     home = root
+    frozen = bool(getattr(sys, "frozen", False))
+    if frozen:
+        prog_args = f"""    <string>{exe}</string>
+    <string>service</string>
+    <string>run</string>"""
+    else:
+        prog_args = f"""    <string>{exe}</string>
+    <string>-m</string>
+    <string>mailkit</string>
+    <string>service</string>
+    <string>run</string>"""
     if target == "launchd":
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -17,11 +28,7 @@ def unit_text(target: str, root: Path) -> str:
   <key>Label</key><string>dev.mailkit.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{exe}</string>
-    <string>-m</string>
-    <string>mailkit</string>
-    <string>service</string>
-    <string>run</string>
+{prog_args}
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -32,6 +39,7 @@ def unit_text(target: str, root: Path) -> str:
 </dict>
 </plist>
 """
+    exec_start = f"{exe} service run" if frozen else f"{exe} -m mailkit service run"
     return f"""[Unit]
 Description=Mailkit local email engine
 After=network.target
@@ -39,7 +47,7 @@ After=network.target
 [Service]
 Type=simple
 Environment=MAILKIT_HOME={home}
-ExecStart={exe} -m mailkit service run
+ExecStart={exec_start}
 Restart=on-failure
 RestartSec=5
 

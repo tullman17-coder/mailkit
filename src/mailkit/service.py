@@ -115,14 +115,62 @@ def stop_daemon(root: Path | None = None, timeout: float = 10.0) -> None:
     clear_pid(root)
 
 
+# Frozen Mailkit.app ignores `-m` and used to re-open the UI for every spawn.
+_DAEMON_ARGV = ["service", "run", "--background-child"]
+_CLI_HEADS = frozenset(
+    {
+        "service",
+        "accounts",
+        "schema",
+        "desktop",
+        "doctor",
+        "plugins",
+        "messages",
+        "mail",
+        "send",
+        "reply",
+        "watch",
+        "events",
+        "subscriptions",
+        "webhooks",
+        "rules",
+        "mailboxes",
+        "-h",
+        "--help",
+        "--version",
+    }
+)
+
+
+def frozen_dispatch_argv(argv: list[str], role: str | None = None) -> list[str] | None:
+    """CLI argv if this frozen process should not open a window. None = open UI."""
+    if role == "daemon":
+        return list(_DAEMON_ARGV)
+    if not argv:
+        return None
+    if argv[0] == "-m" and len(argv) >= 2 and argv[1] == "mailkit":
+        return argv[2:] or list(_DAEMON_ARGV)
+    if argv[0] in _CLI_HEADS:
+        return argv
+    return None
+
+
+def daemon_spawn_cmd(executable: str, *, frozen: bool) -> list[str]:
+    if frozen:
+        return [executable, *_DAEMON_ARGV]
+    return [executable, "-m", "mailkit", *_DAEMON_ARGV]
+
+
 def spawn_background(root: Path | None = None) -> int:
     if is_running(root):
         pid = read_pid(root)
         raise DaemonError(f"mailkit service already running (pid {pid})")
-    cmd = [sys.executable, "-m", "mailkit", "service", "run", "--background-child"]
+    frozen = bool(getattr(sys, "frozen", False))
+    cmd = daemon_spawn_cmd(sys.executable, frozen=frozen)
     env = os.environ.copy()
     src = str(Path(__file__).resolve().parents[1])
     env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+    env["MAILKIT_ROLE"] = "daemon"
     if root:
         env["MAILKIT_HOME"] = str(root)
     pid = os.spawnve(os.P_NOWAIT, sys.executable, cmd, env)
