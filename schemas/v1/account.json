@@ -1,0 +1,29 @@
+{
+  "$id": "mailkit.account.v1",
+  "type": "object",
+  "required": [
+    "id",
+    "address"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "address": {
+      "type": "string"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "auth": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

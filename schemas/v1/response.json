@@ -1,0 +1,29 @@
+{
+  "$id": "mailkit.response.v1",
+  "type": "object",
+  "required": [
+    "ok",
+    "schema",
+    "data",
+    "error"
+  ],
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "schema": {
+      "const": "mailkit.response.v1"
+    },
+    "data": {},
+    "error": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "mailkit.error.v1"
+        }
+      ]
+    }
+  }
+}

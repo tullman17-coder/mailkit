@@ -1,0 +1,29 @@
+{
+  "$id": "mailkit.mailbox.v1",
+  "type": "object",
+  "required": [
+    "name",
+    "role"
+  ],
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "inbox",
+        "saved",
+        "sent",
+        "drafts",
+        "archives",
+        "trash",
+        "junk",
+        "custom"
+      ]
+    },
+    "account_id": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

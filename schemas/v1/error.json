@@ -1,0 +1,23 @@
+{
+  "$id": "mailkit.error.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "code",
+    "message"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mailkit.error.v1"
+    },
+    "code": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "details": {
+      "type": "object"
+    }
+  }
+}

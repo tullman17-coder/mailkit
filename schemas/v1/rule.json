@@ -1,0 +1,29 @@
+{
+  "$id": "mailkit.rule.v1",
+  "type": "object",
+  "required": [
+    "id",
+    "match",
+    "actions"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "priority": {
+      "type": "integer"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "stop": {
+      "type": "boolean"
+    },
+    "match": {
+      "type": "object"
+    },
+    "actions": {
+      "type": "object"
+    }
+  }
+}

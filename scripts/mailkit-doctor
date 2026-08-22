@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""Keep the local mail engine healthy.
+
+Diagnoses config, vault, sqlite, sockets, pid files, watchers, and OAuth
+tokens. Applies only safe repairs (never wipes the credential vault or mail).
+Restarts a dead daemon.
+
+Usage:
+  mailkit-doctor --once
+  mailkit-doctor --interval 30
+  mailkit doctor watchdog
+"""
+
+from mailkit.doctor import watchdog_main
+
+if __name__ == "__main__":
+    raise SystemExit(watchdog_main())

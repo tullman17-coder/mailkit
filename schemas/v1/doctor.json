@@ -1,0 +1,86 @@
+{
+  "$id": "mailkit.doctor.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "ts",
+    "ok",
+    "findings"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mailkit.doctor.v1"
+    },
+    "ts": {
+      "type": "string"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "passed": {
+      "type": "integer"
+    },
+    "repaired": {
+      "type": "integer"
+    },
+    "failed": {
+      "type": "integer"
+    },
+    "skipped": {
+      "type": "integer"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "check",
+          "status",
+          "severity",
+          "message"
+        ],
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "ok",
+              "info",
+              "warn",
+              "error",
+              "critical"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "repaired",
+              "repair_failed",
+              "skip"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "repair": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "auto": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

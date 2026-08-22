@@ -1,0 +1,8 @@
+{
+  "scanned": "2026-08-22",
+  "framework": "vanilla HTML + Python pywebview",
+  "fonts": "Cormorant Garamond + IBM Plex Sans + IBM Plex Mono",
+  "palette": "custom OKLCH from Zermo brand references",
+  "motion": "none (motion-cut)",
+  "notes": "No existing frontend. Desktop is a client of the local /v1 API."
+}

@@ -1,0 +1,46 @@
+# Example ~/.mailkit/config.toml
+# Secrets are NOT stored here. They live in the encrypted vault.
+
+[daemon]
+host = "127.0.0.1"
+port = 8765
+log_level = "info"
+json_logs = false
+event_retention = 100000
+allow_remote = false
+doctor_interval = 60
+doctor_repair = true
+
+[defaults]
+account = "work"
+format = "text"
+
+[accounts.work]
+id = "work"
+name = "Work"
+address = "you@company.com"
+provider = "auto"
+auth = "password"
+enabled = true
+watch = "auto"
+poll_interval = 45
+
+[accounts.work.imap]
+host = "imap.company.com"
+port = 993
+tls = true
+starttls = false
+timeout = 30.0
+
+[accounts.work.smtp]
+host = "smtp.company.com"
+port = 587
+tls = false
+starttls = true
+timeout = 30.0
+
+[accounts.work.folders]
+inbox = "INBOX"
+sent = "Sent"
+drafts = "Drafts"
+archives = "Archive"

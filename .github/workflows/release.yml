@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos-dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build DMG
+        env:
+          MAILKIT_VERSION: ${{ github.ref_name }}
+        run: bash scripts/build-dmg.sh
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mailkit-macos-dmg
+          path: dist-dmg/*.dmg
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-dmg/*.dmg
+          generate_release_notes: true
+          body: |
+            Local Mailkit for macOS.
+
+            Drag **Mailkit.app** to Applications. The engine stays on this Mac;
+            it talks directly to your IMAP/SMTP providers. Credentials are
+            encrypted in `~/.mailkit`.

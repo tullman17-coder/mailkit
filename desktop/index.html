@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mailkit</title>
+    <link rel="icon" href="./brand/mark-256.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600;700&family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./css/app.css" />
+  </head>
+  <body>
+    <div class="app">
+      <nav class="rail" aria-label="Accounts">
+        <div class="brand">
+          <img src="./brand/mark-256.png" alt="Mailkit — two T-rexes holding a sealed envelope" />
+          <h1 class="wordmark">Mailkit</h1>
+          <p class="entity">an entity of zermo.org</p>
+        </div>
+        <div>
+          <h2>Accounts</h2>
+          <div class="accounts" id="accounts">
+            <p class="empty">No accounts yet. Add one from the CLI or use Compose after the engine starts.</p>
+          </div>
+        </div>
+        <div class="rail-foot">
+          <button class="btn primary" id="compose-btn" type="button">Compose</button>
+          <button class="btn" id="doctor-btn" type="button">Doctor</button>
+        </div>
+      </nav>
+
+      <aside class="boxes" aria-label="Mailboxes">
+        <div>
+          <h2>Mailbox</h2>
+          <div id="boxes"></div>
+        </div>
+      </aside>
+
+      <section class="list" aria-label="Messages">
+        <div class="list-head">
+          <h2 id="list-title">Inbox</h2>
+          <div class="filters">
+            <button class="chip" type="button" data-filter="unread" aria-pressed="false">Unread</button>
+            <button class="chip" type="button" data-filter="flagged" aria-pressed="false">Saved</button>
+          </div>
+        </div>
+        <div id="msgs" class="empty">Choose an account, then a mailbox.</div>
+      </section>
+
+      <article class="read" aria-label="Message">
+        <div class="read-head">
+          <h2>Message</h2>
+          <div class="actions">
+            <button class="btn" id="flag-btn" type="button" disabled>Star</button>
+            <button class="btn" id="archive-btn" type="button" disabled>Archive</button>
+            <button class="btn primary" id="reply-btn" type="button" disabled>Reply</button>
+          </div>
+        </div>
+        <div class="read-body" id="read">
+          <p class="empty">Account → mailbox → message. Nothing is bundled out of sight.</p>
+        </div>
+      </article>
+
+      <footer class="status">
+        <span id="where">No account selected</span>
+        <span id="engine">Engine: checking…</span>
+      </footer>
+    </div>
+
+    <div class="modal" id="compose" role="dialog" aria-labelledby="compose-title">
+      <form class="sheet" id="compose-form">
+        <h2 id="compose-title">Send</h2>
+        <label for="to">To</label>
+        <input id="to" name="to" required autocomplete="email" />
+        <label for="subject">Subject</label>
+        <input id="subject" name="subject" required />
+        <label for="body">Body</label>
+        <textarea id="body" name="body" rows="8" required></textarea>
+        <div class="actions">
+          <button class="btn primary" type="submit">Send</button>
+          <button class="btn" type="button" id="compose-cancel">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script src="./js/app.js"></script>
+  </body>
+</html>

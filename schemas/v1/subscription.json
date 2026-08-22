@@ -1,0 +1,31 @@
+{
+  "$id": "mailkit.subscription.v1",
+  "type": "object",
+  "required": [
+    "id",
+    "filter"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    },
+    "filter": {
+      "type": "object"
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "durable": {
+      "type": "boolean"
+    },
+    "ack_required": {
+      "type": "boolean"
+    }
+  }
+}

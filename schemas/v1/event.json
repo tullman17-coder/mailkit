@@ -1,0 +1,56 @@
+{
+  "$id": "mailkit.event.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "ts",
+    "account_id",
+    "provider_id",
+    "type"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mailkit.event.v1"
+    },
+    "id": {
+      "type": "string",
+      "description": "Stable event id"
+    },
+    "ts": {
+      "type": "string"
+    },
+    "account_id": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "mailbox": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "thread_id": {
+      "type": "string"
+    },
+    "message": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "mailkit.message.v1"
+        }
+      ]
+    },
+    "data": {
+      "type": "object"
+    },
+    "idempotency_key": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

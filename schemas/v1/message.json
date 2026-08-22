@@ -1,0 +1,137 @@
+{
+  "$id": "mailkit.message.v1",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "account_id",
+    "provider_id",
+    "mailbox"
+  ],
+  "properties": {
+    "schema": {
+      "const": "mailkit.message.v1"
+    },
+    "id": {
+      "type": "string"
+    },
+    "account_id": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "mailbox": {
+      "type": "string"
+    },
+    "uid": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "uidvalidity": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "native_id": {
+      "type": "string"
+    },
+    "message_id": {
+      "type": "string"
+    },
+    "thread_id": {
+      "type": "string"
+    },
+    "in_reply_to": {
+      "type": "string"
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "date": {
+      "type": "string"
+    },
+    "subject": {
+      "type": "string"
+    },
+    "from": {
+      "type": "array",
+      "items": {
+        "$ref": "mailkit.address.v1"
+      }
+    },
+    "to": {
+      "type": "array",
+      "items": {
+        "$ref": "mailkit.address.v1"
+      }
+    },
+    "cc": {
+      "type": "array",
+      "items": {
+        "$ref": "mailkit.address.v1"
+      }
+    },
+    "flags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "labels": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unread": {
+      "type": "boolean"
+    },
+    "flagged": {
+      "type": "boolean"
+    },
+    "draft": {
+      "type": "boolean"
+    },
+    "has_attachments": {
+      "type": "boolean"
+    },
+    "attachment_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "snippet": {
+      "type": "string"
+    },
+    "body_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "body_html": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "size": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,67 @@
+/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4
+ * Hallmark · genre: atmospheric · macrostructure: Workbench
+ * nav: N3 side-rail · footer: Ft2 status line
+ * theme: studied-DNA (source: image) · vibe: "heraldic gold, burgundy night, infrastructure"
+ * paper: oklch(14% 0.03 20) · accent: oklch(78% 0.12 85)
+ * display: Cormorant Garamond · body: IBM Plex Sans · outlier: IBM Plex Mono
+ * axes: dark / roman-serif / warm · studied: yes · DNA-source: Zermo Brands crest
+ * enrichment: none (mark only) · context: user brand references
+ */
+
+:root {
+  --color-paper: oklch(14% 0.03 20);
+  --color-paper-2: oklch(18% 0.04 18);
+  --color-paper-3: oklch(22% 0.05 18);
+  --color-burgundy: oklch(28% 0.1 18);
+  --color-rule: oklch(30% 0.04 20);
+  --color-rule-2: oklch(26% 0.03 20);
+  --color-muted: oklch(68% 0.02 70);
+  --color-neutral: oklch(58% 0.02 30);
+  --color-ink: oklch(94% 0.02 85);
+  --color-ink-2: oklch(80% 0.02 80);
+  --color-accent: oklch(78% 0.12 85);
+  --color-accent-ink: oklch(18% 0.04 20);
+  --color-focus: oklch(80% 0.16 85);
+  --color-danger: oklch(62% 0.16 25);
+  --color-ok: oklch(72% 0.12 145);
+
+  --font-display: "Cormorant Garamond", "Iowan Old Style", Palatino, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, sans-serif;
+  --font-outlier: "IBM Plex Mono", ui-monospace, monospace;
+
+  --text-xs: 0.64rem;
+  --text-sm: 0.8rem;
+  --text-base: 1rem;
+  --text-md: 1.25rem;
+  --text-lg: 1.5625rem;
+  --text-xl: 1.9531rem;
+  --text-2xl: 2.4414rem;
+  --text-display: clamp(2rem, 3vw + 1rem, 3.2rem);
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+
+  --radius-sm: 2px;
+  --radius-md: 6px;
+  --rule: 1px solid var(--color-rule);
+
+  --z-base: 1;
+  --z-raised: 10;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal: 400;
+  --z-toast: 500;
+}

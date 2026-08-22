@@ -1,0 +1,15 @@
+{
+  "$id": "mailkit.address.v1",
+  "type": "object",
+  "required": [
+    "address"
+  ],
+  "properties": {
+    "address": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string"
+    }
+  }
+}

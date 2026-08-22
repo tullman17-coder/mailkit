@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mailkit"
+version = "0.1.0"
+description = "Local, cross-platform email engine, daemon, and CLI for multiple accounts."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Mailkit" }]
+keywords = ["email", "imap", "smtp", "cli", "daemon", "agents"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Environment :: Console",
+  "Operating System :: OS Independent",
+  "Topic :: Communications :: Email",
+]
+dependencies = [
+  "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+desktop = ["pywebview>=5.0"]
+packaging = ["pyinstaller>=6.0"]
+
+[project.scripts]
+mailkit = "mailkit.cli.main:main"
+mailkit-doctor = "mailkit.doctor:watchdog_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mailkit = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"

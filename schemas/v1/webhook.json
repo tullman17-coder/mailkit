@@ -1,0 +1,22 @@
+{
+  "$id": "mailkit.webhook.v1",
+  "type": "object",
+  "required": [
+    "id",
+    "url"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "url": {
+      "type": "string"
+    },
+    "filter": {
+      "type": "object"
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  }
+}
