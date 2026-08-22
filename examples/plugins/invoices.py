@@ -1,15 +1,15 @@
 """Example message-processing hook. Drop a copy in ~/.mailkit/plugins/.
 
-This tags Empire Today claim mail so agents can subscribe with --rule or --tag
-instead of rescanning every inbox.
+Tags vendor invoices so agents can subscribe with --tag instead of
+rescanning every inbox.
 """
 
 from mailkit.plugins.types import HookAction, HookContext
 
 
-class EmpireTodayHook:
+class InvoiceHook:
     plugin_type = "hook"
-    id = "empire_today"
+    id = "invoices"
     priority = 200
 
     def process(self, ctx: HookContext) -> HookAction | None:
@@ -20,12 +20,10 @@ class EmpireTodayHook:
                 " ".join(a.address for a in ctx.message.from_),
             ]
         ).lower()
-        if "empire today" not in blob and "empiretoday.com" not in blob:
+        if "invoice" not in blob and "vendor.example" not in blob:
             return None
-        if "claim" not in blob:
-            return HookAction(tag=["empire-today"])
-        return HookAction(tag=["empire-today", "claim"], flag=True)
+        return HookAction(tag=["invoice"], flag=True)
 
 
 def register(registry) -> None:
-    registry.register(EmpireTodayHook())
+    registry.register(InvoiceHook())

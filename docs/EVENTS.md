@@ -34,9 +34,9 @@ New types may be added. Clients must ignore unknown types.
 
 ## Agent example
 
-Subscribe to one claim stream without scanning other inboxes:
+Subscribe to one invoice stream without scanning other inboxes:
 
 ```
-mailkit subscriptions add --name empire --account work --subject "Empire Today" --tag claim
-mailkit events stream --account work --subject "Empire Today" --format ndjson
+mailkit subscriptions add --name invoices --account work --subject "Invoice" --tag invoice
+mailkit events stream --account work --subject "Invoice" --format ndjson
 ```

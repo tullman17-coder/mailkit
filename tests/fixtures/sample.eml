@@ -1,22 +1,22 @@
 MIME-Version: 1.0
 Date: Fri, 21 Aug 2026 10:00:00 -0500
-From: Claims Desk <claims@empiretoday.com>
+From: Billing <billing@vendor.example>
 To: Agent <ops@example.com>
-Cc: "Adjuster" <adjuster@broker.test>
-Subject: Empire Today claim #4421 needs photos
-Message-ID: <4421@empiretoday.com>
-In-Reply-To: <root@empiretoday.com>
-References: <root@empiretoday.com>
+Cc: "AP" <ap@broker.test>
+Subject: Invoice INV-1042 attached
+Message-ID: <1042@vendor.example>
+In-Reply-To: <root@vendor.example>
+References: <root@vendor.example>
 Content-Type: multipart/mixed; boundary="BOUND"
 
 --BOUND
 Content-Type: text/plain; charset="utf-8"
 
-Please review the attached claim packet for job 4421.
+Please review the attached invoice.
 
 --BOUND
 Content-Type: application/pdf
-Content-Disposition: attachment; filename="claim-4421.pdf"
+Content-Disposition: attachment; filename="invoice-1042.pdf"
 
 JVBERi0xLjQK
 --BOUND--

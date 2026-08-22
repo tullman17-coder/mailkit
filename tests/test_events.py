@@ -46,7 +46,7 @@ def test_idempotent_publish_and_cursor(tmp_path: Path):
 def test_live_filter_queue(tmp_path: Path):
     store = Store(tmp_path)
     bus = EventBus(store)
-    q = bus.subscribe_live(EventFilter(subject=["Empire"]))
+    q = bus.subscribe_live(EventFilter(subject=["Invoice"]))
     bus.publish(
         Event(
             id=new_id("evt"),
@@ -64,11 +64,11 @@ def test_live_filter_queue(tmp_path: Path):
             provider_id="imap",
             mailbox="INBOX",
             type="message.created",
-            message={"subject": "Empire Today claim", "from": [], "account_id": "work", "provider_id": "imap", "mailbox": "INBOX", "id": "b", "schema": "mailkit.message.v1"},
+            message={"subject": "Invoice INV-1042", "from": [], "account_id": "work", "provider_id": "imap", "mailbox": "INBOX", "id": "b", "schema": "mailkit.message.v1"},
         )
     )
     item = q.get_nowait()
-    assert "Empire" in item["message"]["subject"]
+    assert "Invoice" in item["message"]["subject"]
     assert q.empty()
 
 
@@ -76,7 +76,7 @@ def test_durable_subscription_ack(tmp_path: Path):
     store = Store(tmp_path)
     bus = EventBus(store)
     ev = bus.publish(Event(id=new_id("evt"), account_id="work", provider_id="imap", type="message.created"))
-    store.save_subscription("sub1", "claims", EventFilter(account=["work"]), durable=True, ack_required=True, cursor=None)
+    store.save_subscription("sub1", "invoices", EventFilter(account=["work"]), durable=True, ack_required=True, cursor=None)
     store.ack("sub1", ev.id, "pending")
     store.ack("sub1", ev.id, "acked")
     row = store.conn.execute("SELECT status FROM acks WHERE subscription_id='sub1'").fetchone()

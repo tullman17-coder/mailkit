@@ -52,4 +52,4 @@ class InvoiceHook:
 
 Hooks must not delete or forward mail unless you add that action yourself. Built-in rules strip `delete` / `purge` / `drop`.
 
-See `examples/plugins/empire_today.py`.
+See `examples/plugins/invoices.py`.

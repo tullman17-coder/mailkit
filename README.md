@@ -66,24 +66,25 @@ The daemon detects new mail, replies, moves, deletes, and flag changes as they h
 
 It does **not** cron-scan entire inboxes. After downtime it backfills only the missing cursor interval.
 
-Stream one slice of mail (for example Empire Today claims) without reading every mailbox:
+Stream one slice of mail without reading every mailbox:
 
 ```bash
-mailkit events stream --account work --subject "Empire Today" --tag claim --format ndjson
+mailkit events stream --account work --subject "Invoice" --tag invoice --format ndjson
 ```
 
 Durable subscriptions survive process restarts:
 
 ```bash
-mailkit subscriptions add --name empire --account work --subject "Empire Today"
+mailkit subscriptions add --name invoices --account work --subject "Invoice"
 mailkit events stream --cursor evt_last_seen
 mailkit events ack sub_xxx evt_yyy
 ```
 
-Webhooks (local or remote) get the same JSON with HMAC signatures and retries:
+Webhooks POST to a URL you control. `--secret` is an HMAC key you generate locally — it is stored in the encrypted vault, never in git. `127.0.0.1` is this machine.
 
 ```bash
-mailkit webhooks add --url http://127.0.0.1:9000/mail --secret "$HOOK_SECRET" --subject "Empire Today"
+export WEBHOOK_HMAC="$(openssl rand -hex 24)"
+mailkit webhooks add --url http://127.0.0.1:9000/mail --secret "$WEBHOOK_HMAC" --subject Invoice
 ```
 
 ## Command map
@@ -128,12 +129,12 @@ Filters: `--unread`, `--flagged`, `--tagged`, `--since`, `--before`.
 Higher `priority` runs first. Matching stops when a rule sets `stop = true`. Built-in actions never delete mail.
 
 ```bash
-mailkit rules add --name empire --priority 200 --stop \
-  --match '{"from_domain":["empiretoday.com"],"subject_contains":["claim"]}' \
-  --actions '{"tag":["empire-today","claim"],"flag":true}'
+mailkit rules add --name invoices --priority 200 --stop \
+  --match '{"from_domain":["vendor.example"],"subject_contains":["Invoice"]}' \
+  --actions '{"tag":["invoice"],"flag":true}'
 ```
 
-Custom classifiers are plugins (see `examples/plugins/empire_today.py`).
+Custom classifiers are plugins (see `examples/plugins/invoices.py`).
 
 ## Layout on disk
 

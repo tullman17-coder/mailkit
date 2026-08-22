@@ -19,15 +19,15 @@ def test_parse_sample_eml():
     assert msg.account_id == "work"
     assert msg.mailbox == "INBOX"
     assert msg.uid == 17
-    assert "Empire Today claim #4421" in msg.subject
-    assert msg.from_[0].address == "claims@empiretoday.com"
+    assert "Invoice INV-1042" in msg.subject
+    assert msg.from_[0].address == "billing@vendor.example"
     assert msg.to[0].address == "ops@example.com"
     assert msg.flagged is True
     assert msg.unread is False
     assert msg.has_attachments is True
     assert "application/pdf" in msg.attachment_types
-    assert msg.attachments[0].filename == "claim-4421.pdf"
-    assert "claim packet" in (msg.body_text or "")
+    assert msg.attachments[0].filename == "invoice-1042.pdf"
+    assert "invoice" in (msg.body_text or "")
     assert msg.thread_id.startswith("thr_")
     assert msg.id.startswith("msg_")
 

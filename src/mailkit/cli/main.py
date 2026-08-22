@@ -28,7 +28,7 @@ examples:
   mailkit accounts add --address you@custom.com --imap-host imap.example.com --smtp-host smtp.example.com
   mailkit messages list --account work --mailbox inbox --unread
   mailkit messages get --account work --mailbox INBOX 12345
-  mailkit events stream --account work --subject "Empire Today"
+  mailkit events stream --account work --subject "Invoice"
   mailkit send --account work --to someone@example.com --subject Hello --body "Hi"
 
 Navigation is always account → mailbox → message. Use --unified only when you

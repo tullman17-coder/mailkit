@@ -9,13 +9,13 @@ def _msg(**kwargs) -> Message:
         account_id="work",
         provider_id="imap",
         mailbox="INBOX",
-        subject="Empire Today claim #4421",
-        from_=[Address("claims@empiretoday.com", "Claims")],
+        subject="Invoice INV-1042 attached",
+        from_=[Address("billing@vendor.example", "Billing")],
         to=[Address("ops@example.com")],
-        snippet="Please review the attached claim packet",
+        snippet="Please review the attached invoice",
         attachment_types=["application/pdf"],
         has_attachments=True,
-        thread_id="thr_emp",
+        thread_id="thr_inv",
         tags=[],
         labels=[],
     )
@@ -29,20 +29,20 @@ def test_priority_and_stop():
             Rule(
                 id="low",
                 priority=1,
-                match={"subject_contains": ["Empire Today"]},
+                match={"subject_contains": ["Invoice"]},
                 actions={"tag": ["low"]},
             ),
             Rule(
                 id="high",
                 priority=50,
                 stop=True,
-                match={"from_domain": ["empiretoday.com"], "attachment_type": ["pdf"]},
-                actions={"tag": ["empire-today", "claim"], "flag": True},
+                match={"from_domain": ["vendor.example"], "attachment_type": ["pdf"]},
+                actions={"tag": ["invoice"], "flag": True},
             ),
         ]
     )
     result = engine.evaluate(_msg(), account_id="work", mailbox="INBOX")
-    assert result.tag == ["empire-today", "claim"]
+    assert result.tag == ["invoice"]
     assert result.flag is True
     assert result.stop is True
     assert result.extra["matched_rules"] == ["high"]
@@ -54,7 +54,7 @@ def test_safe_defaults_ignore_delete():
             Rule(
                 id="bad",
                 priority=10,
-                match={"query": "claim"},
+                match={"query": "invoice"},
                 actions={"delete": True, "tag": ["kept"]},
             )
         ]
@@ -67,12 +67,12 @@ def test_safe_defaults_ignore_delete():
 def test_all_vs_any_mode():
     rule_all = Rule(
         id="all",
-        match={"mode": "all", "subject_contains": ["Empire"], "from_domain": ["nope.test"]},
+        match={"mode": "all", "subject_contains": ["Invoice"], "from_domain": ["nope.test"]},
         actions={"tag": ["x"]},
     )
     rule_any = Rule(
         id="any",
-        match={"mode": "any", "subject_contains": ["Empire"], "from_domain": ["nope.test"]},
+        match={"mode": "any", "subject_contains": ["Invoice"], "from_domain": ["nope.test"]},
         actions={"tag": ["y"]},
     )
     msg = _msg()
@@ -85,17 +85,17 @@ def test_event_filter_for_agent_subscription():
         "type": "message.created",
         "account_id": "work",
         "mailbox": "INBOX",
-        "thread_id": "thr_emp",
+        "thread_id": "thr_inv",
         "message": {
-            "subject": "Empire Today claim #4421",
-            "from": [{"address": "claims@empiretoday.com"}],
+            "subject": "Invoice INV-1042 attached",
+            "from": [{"address": "billing@vendor.example"}],
             "to": [{"address": "ops@example.com"}],
-            "tags": ["claim"],
+            "tags": ["invoice"],
             "attachment_types": ["application/pdf"],
-            "snippet": "claim packet",
+            "snippet": "attached invoice",
         },
     }
-    filt = EventFilter(subject=["Empire Today"], sender=["empiretoday.com"], attachment_type=["pdf"])
+    filt = EventFilter(subject=["Invoice"], sender=["vendor.example"], attachment_type=["pdf"])
     assert event_filter_match(filt, event) is True
     assert event_filter_match(EventFilter(subject=["unrelated"]), event) is False
     assert event_filter_match(EventFilter(), event) is True
