@@ -38,3 +38,90 @@ def test_json_schema_command(tmp_path, monkeypatch):
 def test_write_schema_files(tmp_path):
     write_schema_files(tmp_path)
     assert (tmp_path / "event.json").exists()
+
+
+def test_oauth2_add_posts_accounts_when_daemon_running(tmp_path, monkeypatch):
+    """OAuth add must tell a running daemon to start the watcher, like password add."""
+    calls = []
+
+    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: True)
+    monkeypatch.setattr(
+        "mailkit.oauth_flow.run_local_oauth",
+        lambda acc, secrets, **kwargs: {
+            "access_token": "at-test",
+            "refresh_token": "rt-test",
+            "token_expiry": 1,
+        },
+    )
+
+    def capture_request(self, method, path, *, query=None, body=None):
+        calls.append({"method": method, "path": path, "body": body})
+        return {"data": {"id": (body or {}).get("id") or "you"}}
+
+    monkeypatch.setattr("mailkit.cli.client.ApiClient.request", capture_request)
+
+    rc = main(
+        [
+            "--home",
+            str(tmp_path),
+            "accounts",
+            "add",
+            "--address",
+            "you@gmail.com",
+            "--auth",
+            "oauth2",
+            "--client-id",
+            "cid",
+            "--no-discover",
+            "--imap-host",
+            "imap.gmail.com",
+            "--smtp-host",
+            "smtp.gmail.com",
+        ]
+    )
+    assert rc == 0
+    posts = [c for c in calls if c["method"] == "POST" and c["path"] == "/v1/accounts"]
+    assert len(posts) == 1
+    assert posts[0]["body"]["auth"] == "oauth2"
+    assert posts[0]["body"]["access_token"] == "at-test"
+    assert posts[0]["body"]["refresh_token"] == "rt-test"
+
+
+def test_oauth2_add_skips_daemon_post_when_stopped(tmp_path, monkeypatch):
+    calls = []
+
+    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: False)
+    monkeypatch.setattr(
+        "mailkit.oauth_flow.run_local_oauth",
+        lambda acc, secrets, **kwargs: {
+            "access_token": "at-test",
+            "refresh_token": "rt-test",
+            "token_expiry": 1,
+        },
+    )
+    monkeypatch.setattr(
+        "mailkit.cli.client.ApiClient.request",
+        lambda self, method, path, *, query=None, body=None: calls.append((method, path)) or {},
+    )
+
+    rc = main(
+        [
+            "--home",
+            str(tmp_path),
+            "accounts",
+            "add",
+            "--address",
+            "you@gmail.com",
+            "--auth",
+            "oauth2",
+            "--client-id",
+            "cid",
+            "--no-discover",
+            "--imap-host",
+            "imap.gmail.com",
+            "--smtp-host",
+            "smtp.gmail.com",
+        ]
+    )
+    assert rc == 0
+    assert calls == []
