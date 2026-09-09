@@ -8,9 +8,9 @@ from typing import Any, Callable
 
 from mailkit.backoff import Backoff
 from mailkit.config import AccountConfig
-from mailkit.ids import idempotency_key, new_id
+from mailkit.ids import idempotency_key, message_id as make_message_id, new_id
 from mailkit.logutil import get_logger
-from mailkit.models import Event, utcnow
+from mailkit.models import Address, Event, Message, utcnow
 from mailkit.providers.graph import GraphProvider
 from mailkit.watchers.flag_diff import (
     emit_typed_events,
@@ -73,10 +73,85 @@ class GraphPushWatcher:
                 stop.wait(backoff.fail())
 
 
-def _emit_delta_item(account, provider, mailbox, item: dict, emit) -> None:
+def _delta_event_type(item: dict, *, known: bool) -> str:
+    """Map Graph delta / notification change types. FLAG-F7 owns flag/read specialization."""
+    if item.get("@removed"):
+        return "message.deleted"
+    change = str(item.get("changeType") or "").strip().lower()
+    if change in {"created", "updated", "deleted"}:
+        return f"message.{change}"
+    return "message.updated" if known else "message.created"
+
+
+def _imap_uid_for(row: dict | None) -> str | None:
+    if not row:
+        return None
+    uid = row.get("uid")
+    if uid is None or uid == "":
+        return None
+    return str(uid)
+
+
+def _message_from_graph(account, mailbox: str, item: dict) -> Message:
+    native = item.get("id") or ""
+    from_addr = ((item.get("from") or {}).get("emailAddress") or {})
+    flagged = (item.get("flag") or {}).get("flagStatus") == "flagged"
+    unread = item.get("isRead") is False
+    flags: list[str] = []
+    if flagged:
+        flags.append("Flagged")
+    if not unread:
+        flags.append("Seen")
+    mid = str(item.get("internetMessageId") or "").strip("<>")
+    return Message(
+        id=make_message_id(account.id, mailbox, "graph", native),
+        account_id=account.id,
+        provider_id="graph",
+        mailbox=mailbox,
+        native_id=native,
+        message_id=mid,
+        thread_id=item.get("conversationId") or "",
+        subject=item.get("subject") or "",
+        from_=[Address(address=from_addr.get("address") or "", name=from_addr.get("name") or "")],
+        flags=flags,
+        unread=unread,
+        flagged=flagged,
+        draft=bool(item.get("isDraft")),
+        has_attachments=bool(item.get("hasAttachments")),
+        snippet=item.get("bodyPreview") or "",
+    )
+
+
+def _fetch_and_upsert(account, provider, mailbox: str, item: dict, existing: dict | None) -> Message | None:
+    store = getattr(provider, "store", None)
+    uid = _imap_uid_for(existing)
+    getter = getattr(provider, "get_message", None)
+    if uid and callable(getter):
+        try:
+            msg = getter(mailbox, uid, peek=True)
+            if msg is not None:
+                return msg
+        except Exception as exc:
+            log.info("graph delta imap fetch uid=%s failed: %s", uid, exc)
+    msg = _message_from_graph(account, mailbox, item)
+    if existing:
+        msg.id = existing.get("id") or msg.id
+        if existing.get("uid") is not None:
+            msg.uid = existing.get("uid")
+        if existing.get("uidvalidity") is not None:
+            msg.uidvalidity = existing.get("uidvalidity")
+        msg.tags = existing.get("tags") or []
+    if store:
+        store.upsert_message(msg)
+    return msg
+
+
+def _emit_delta_item(account, provider, mailbox: str, item: dict, emit) -> None:
     native = item.get("id") or ""
     store = getattr(provider, "store", None)
-    if item.get("@removed"):
+    existing = find_indexed(store, account.id, native, mailbox)
+    etype = _delta_event_type(item, known=bool(existing))
+    if etype == "message.deleted":
         emit(
             Event(
                 id=new_id("evt"),
@@ -87,23 +162,25 @@ def _emit_delta_item(account, provider, mailbox, item: dict, emit) -> None:
                 type="message.deleted",
                 thread_id=item.get("conversationId") or "",
                 data={"graph": item},
+                message=None,
                 idempotency_key=idempotency_key(account.id, mailbox, "message.deleted", native),
             )
         )
         return
-    flagged = (item.get("flag") or {}).get("flagStatus") == "flagged"
-    unread = item.get("isRead") is False
-    summary = _graph_summary(account, mailbox, item)
-    prev = find_indexed(store, account.id, native, mailbox)
-    if prev:
+    fetched = _fetch_and_upsert(account, provider, mailbox, item, existing)
+    message = fetched.summary() if fetched is not None and hasattr(fetched, "summary") else None
+    flagged = bool(getattr(fetched, "flagged", False)) if fetched is not None else (item.get("flag") or {}).get("flagStatus") == "flagged"
+    unread = bool(getattr(fetched, "unread", True)) if fetched is not None else item.get("isRead") is False
+    explicit = str(item.get("changeType") or "").strip().lower() in {"created", "updated", "deleted"}
+    if existing and not explicit:
         types = flag_event_types(
-            prev_flagged=bool(prev.get("flagged")),
-            prev_unread=bool(prev.get("unread", True)),
-            flagged=flagged,
-            unread=unread,
+            prev_flagged=bool(existing.get("flagged")),
+            prev_unread=bool(existing.get("unread", True)),
+            flagged=bool(flagged),
+            unread=bool(unread),
         )
         if types:
-            persist_index_flags(store, prev, flagged=flagged, unread=unread)
+            persist_index_flags(store, existing, flagged=bool(flagged), unread=bool(unread))
             emit_typed_events(
                 account,
                 "graph",
@@ -112,7 +189,7 @@ def _emit_delta_item(account, provider, mailbox, item: dict, emit) -> None:
                 emit,
                 native_id=native,
                 thread_id=item.get("conversationId") or "",
-                message=summary,
+                message=message,
                 data={"graph": {"id": native, "subject": item.get("subject")}},
             )
             return
@@ -123,28 +200,10 @@ def _emit_delta_item(account, provider, mailbox, item: dict, emit) -> None:
             account_id=account.id,
             provider_id="graph",
             mailbox=mailbox,
-            type="message.created",
-            thread_id=item.get("conversationId") or "",
-            data={"graph": {"id": native, "subject": item.get("subject")}},
-            message=summary,
-            idempotency_key=idempotency_key(account.id, mailbox, "message.created", native),
+            type=etype,
+            thread_id=item.get("conversationId") or (message or {}).get("thread_id") or "",
+            data={"graph": item if etype == "message.deleted" else {"id": native, "subject": item.get("subject")}},
+            message=message,
+            idempotency_key=idempotency_key(account.id, mailbox, etype, native),
         )
     )
-
-
-def _graph_summary(account, mailbox, item: dict) -> dict:
-    return {
-        "schema": "mailkit.message.v1",
-        "id": f"msg_graph_{item.get('id','')[:20]}",
-        "account_id": account.id,
-        "provider_id": "graph",
-        "mailbox": mailbox,
-        "native_id": item.get("id"),
-        "subject": item.get("subject") or "",
-        "from": [{"address": ((item.get("from") or {}).get("emailAddress") or {}).get("address", ""), "name": ((item.get("from") or {}).get("emailAddress") or {}).get("name", "")}],
-        "thread_id": item.get("conversationId") or "",
-        "unread": bool(item.get("isRead") is False),
-        "flagged": ((item.get("flag") or {}).get("flagStatus") == "flagged"),
-        "has_attachments": bool(item.get("hasAttachments")),
-        "snippet": item.get("bodyPreview") or "",
-    }
