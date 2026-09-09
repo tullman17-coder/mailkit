@@ -29,8 +29,9 @@ New types may be added. Clients must ignore unknown types.
 1. Events are appended to SQLite with a unique `idempotency_key`. Duplicates are dropped.
 2. `mailkit subscriptions add` stores a filter + cursor (last event id).
 3. On reconnect, replay `GET /v1/events?cursor=<last_acked>`.
-4. `POST /v1/events/ack` records acknowledgement. Failed webhook deliveries retry (5 attempts, exponential backoff).
-5. After process restart the daemon continues from stored IMAP UID / Gmail historyId / Graph deltaLink, so only the down interval is backfilled.
+4. `POST /v1/events/ack` records acknowledgement. Failed webhook deliveries retry independently per hook (5 attempts, exponential backoff) so a down endpoint cannot stall other hooks.
+5. Webhook attempts are persisted in SQLite (`webhook_deliveries`) and replayed when the dispatcher starts. A daemon restart does not drop the retry queue.
+6. After process restart the daemon continues from stored IMAP UID / Gmail historyId / Graph deltaLink, so only the down interval is backfilled.
 
 ## Agent example
 
