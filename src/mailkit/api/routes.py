@@ -13,10 +13,13 @@ from dataclasses import fields
 
 from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, save_config
 from mailkit.discovery import discover
-from mailkit.errors import NotFoundError, UsageError
+from mailkit.errors import NetworkError, NotFoundError, UsageError
+from mailkit.logutil import get_logger
 from mailkit.ids import new_id
 from mailkit.models import EventFilter, Mailbox, fail, ok, utcnow
 from mailkit.rules import Rule, RulesEngine, event_filter_match
+
+log = get_logger("mailkit.api")
 
 
 def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) -> Any:
@@ -413,10 +416,16 @@ def _reply(app: App, body: dict):
     mid = provider.send(acc.address, to, msg.as_bytes())
     native = stored.get("native_id") or stored.get("uid")
     if native:
+        mailbox = stored.get("mailbox") or "INBOX"
         try:
-            provider.set_flags(stored.get("mailbox") or "INBOX", str(native), add=["Answered"])
-        except Exception:
-            pass
+            provider.set_flags(mailbox, str(native), add=["Answered"])
+        except Exception as exc:
+            log.exception("IMAP STORE Answered failed for %s", msg_id)
+            raise NetworkError(
+                f"IMAP STORE Answered failed after reply: {exc}",
+                details={"message_id": mid, "id": msg_id},
+            ) from exc
+        app.runtime.store.patch_message_flags(msg_id, add=["Answered"])
     return ok({"message_id": mid, "in_reply_to": stored.get("message_id")})
 
 
