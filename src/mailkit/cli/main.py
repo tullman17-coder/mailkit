@@ -12,7 +12,7 @@ from pathlib import Path
 from mailkit import SCHEMA_VERSION, __version__
 from mailkit.cli.client import ApiClient
 from mailkit.cli.output import Printer
-from mailkit.config import load_config, save_config
+from mailkit.config import infer_provider_id, load_config, save_config
 from mailkit.discovery import discover
 from mailkit.errors import ExitCode, MailkitError, UsageError
 from mailkit.ids import new_id
@@ -414,7 +414,7 @@ def _accounts(args, root, out, client: ApiClient) -> int:
             "address": args.address,
             "id": args.id,
             "name": args.name,
-            "provider": args.provider,
+            "provider": _resolve_add_provider(args),
             "auth": args.auth,
             "watch": args.watch,
             "discover": not args.no_discover,
@@ -471,6 +471,20 @@ def _accounts(args, root, out, client: ApiClient) -> int:
         out.data(_acc_row(acc), text=f"added {acc.id} ({acc.address})")
         return 0
     return ExitCode.USAGE
+
+
+def _resolve_add_provider(args) -> str:
+    """Persist a concrete provider_id when --provider auto (default)."""
+    requested = getattr(args, "provider", None) or "auto"
+    if requested not in {"auto", ""}:
+        return requested
+    imap_host = getattr(args, "imap_host", None) or ""
+    discovered_id = None
+    if not getattr(args, "no_discover", False):
+        spec = discover(args.address)
+        discovered_id = spec.provider_id
+        imap_host = imap_host or spec.imap_host
+    return infer_provider_id(args.address, imap_host, discovered_id=discovered_id)
 
 
 def _acc_row(acc) -> dict:
