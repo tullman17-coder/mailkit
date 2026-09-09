@@ -24,6 +24,15 @@ log = get_logger("mailkit.api")
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+# Desktop loads index.html as a file:// URI and fetches this API with
+# Authorization. Browsers require these headers on the actual GET/POST/SSE
+# response, not only on the OPTIONS preflight.
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,PATCH,OPTIONS",
+}
+
 
 @dataclass
 class App:
@@ -83,11 +92,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self):  # noqa: N802
         self._dispatch()
 
+    def _send_cors_headers(self) -> None:
+        for name, value in CORS_HEADERS.items():
+            self.send_header(name, value)
+
     def do_OPTIONS(self):  # noqa: N802
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,PATCH,OPTIONS")
+        self._send_cors_headers()
         self.end_headers()
 
     def _dispatch(self) -> None:
@@ -134,6 +145,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = resp.headers or {"Content-Type": "application/json"}
         for k, v in headers.items():
             self.send_header(k, v)
+        self._send_cors_headers()
         self.end_headers()
         if resp.body:
             self.wfile.write(resp.body)
@@ -143,6 +155,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
+        self._send_cors_headers()
         self.end_headers()
         try:
             resp.stream(self.wfile)
