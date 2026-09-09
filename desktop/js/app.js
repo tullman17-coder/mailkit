@@ -154,7 +154,7 @@
       limit: "40",
     });
     if (state.unread) q.set("unread", "true");
-    if (state.flagged) q.set("flagged", "true");
+    if (state.flagged || state.mailbox === "saved") q.set("flagged", "true");
     try {
       state.messages = (await api("GET", "/v1/messages?" + q.toString())) || [];
     } catch (err) {

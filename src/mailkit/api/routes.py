@@ -14,6 +14,7 @@ from dataclasses import fields
 from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, infer_provider_id, save_config
 from mailkit.discovery import discover
 from mailkit.errors import NetworkError, NotFoundError, UsageError
+from mailkit.folders import resolve_saved_view
 from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import (
@@ -304,12 +305,14 @@ def _list_messages(app: App, params: dict):
     folder = mailbox
     if mailbox.lower() in {"inbox", "saved", "sent", "drafts", "archives", "trash", "junk"}:
         role = mailbox.lower()
-        match = next((b for b in boxes if getattr(b, "role", "") == role), None)
-        if role == "saved" and (not match or match.name.upper() == "INBOX"):
-            folder = match.name if match else "INBOX"
-            params["flagged"] = "true"
-        elif match:
-            folder = match.name
+        if role == "saved":
+            folder, apply_flagged = resolve_saved_view(boxes)
+            if apply_flagged:
+                params["flagged"] = "true"
+        else:
+            match = next((b for b in boxes if getattr(b, "role", "") == role), None)
+            if match:
+                folder = match.name
     live = str(params.get("live") or "true").lower() != "false"
     if live:
         try:
