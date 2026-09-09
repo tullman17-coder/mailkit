@@ -17,6 +17,7 @@
     current: null,
     unread: false,
     flagged: false,
+    replyId: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -206,8 +207,16 @@
     if (state.accounts[0]) await selectAccount(state.accounts[0].id);
   }
 
-  $("compose-btn").addEventListener("click", () => $("compose").classList.add("open"));
-  $("compose-cancel").addEventListener("click", () => $("compose").classList.remove("open"));
+  function closeCompose() {
+    state.replyId = null;
+    $("compose").classList.remove("open");
+  }
+
+  $("compose-btn").addEventListener("click", () => {
+    state.replyId = null;
+    $("compose").classList.add("open");
+  });
+  $("compose-cancel").addEventListener("click", closeCompose);
   $("compose-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     if (!state.account) {
@@ -215,13 +224,23 @@
       return;
     }
     try {
-      await api("POST", "/v1/send", {
-        account: state.account,
-        to: [$("to").value],
-        subject: $("subject").value,
-        body: $("body").value,
-      });
-      $("compose").classList.remove("open");
+      if (state.replyId) {
+        await api("POST", "/v1/reply", {
+          account: state.account,
+          id: state.replyId,
+          to: [$("to").value],
+          subject: $("subject").value,
+          body: $("body").value,
+        });
+      } else {
+        await api("POST", "/v1/send", {
+          account: state.account,
+          to: [$("to").value],
+          subject: $("subject").value,
+          body: $("body").value,
+        });
+      }
+      closeCompose();
       toast("Sent.");
     } catch (err) {
       toast(err.message);
@@ -251,7 +270,7 @@
   $("archive-btn").addEventListener("click", async () => {
     if (!state.current) return;
     try {
-      await api("POST", `/v1/messages/${state.current.id}/move`, { mailbox: "Archive" });
+      await api("POST", `/v1/messages/${state.current.id}/move`, { mailbox: "archives" });
       toast("Moved to Archive.");
       await loadMessages();
     } catch (err) {
@@ -260,6 +279,7 @@
   });
   $("reply-btn").addEventListener("click", () => {
     if (!state.current) return;
+    state.replyId = state.current.id;
     $("compose").classList.add("open");
     $("subject").value = (state.current.subject || "").startsWith("Re:")
       ? state.current.subject

@@ -2,9 +2,11 @@ from mailkit.folders import (
     build_folder_map,
     is_virtual_flagged_mailbox,
     parse_list_line,
+    resolve_mailbox_name,
     resolve_saved_view,
     role_from_attrs,
     role_from_name,
+    section_role,
 )
 from mailkit.models import Mailbox
 
@@ -136,9 +138,24 @@ def test_folder_map_prefers_special_use_saved_over_heuristic_name():
 
 
 def test_leftover_starred_still_occupies_saved_section_when_alone():
+def test_leftover_starred_still_occupies_saved_section_when_alone():
     leftover = parse_list_line(r'(\HasNoChildren) "/" "Starred"')
     fmap = build_folder_map([Mailbox(name="INBOX", role="inbox"), leftover])
     assert fmap.by_role["saved"].name == "Starred"
     folder, apply_flagged = resolve_saved_view(fmap.sections())
     assert folder == "INBOX"
     assert apply_flagged is True
+
+
+def test_resolve_archives_uses_gmail_all_mail():
+    listed = [
+        Mailbox(name="INBOX", role="inbox"),
+        Mailbox(name="[Gmail]/All Mail", role="archives"),
+        Mailbox(name="[Gmail]/Sent Mail", role="sent"),
+    ]
+    assert section_role("archives") == "archives"
+    assert section_role("Archive") == "archives"
+    assert resolve_mailbox_name(listed, "archives") == "[Gmail]/All Mail"
+    assert resolve_mailbox_name(listed, "Archive") == "[Gmail]/All Mail"
+    assert resolve_mailbox_name(listed, "Receipts") == "Receipts"
+    assert resolve_mailbox_name(listed, "inbox") == "INBOX"

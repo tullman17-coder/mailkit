@@ -30,6 +30,37 @@ NAME_ROLES: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 SECTION_ORDER = ("inbox", "saved", "sent", "drafts", "archives")
+SECTION_ROLES = frozenset((*SECTION_ORDER, "trash", "junk"))
+
+
+def mailbox_for_role(mailboxes: list[Mailbox], role: str) -> Mailbox | None:
+    """Return the mailbox whose SPECIAL-USE / heuristic role matches."""
+    return next((b for b in mailboxes if getattr(b, "role", "") == role), None)
+
+
+def section_role(mailbox: str) -> str | None:
+    """Canonical section role for a mailbox argument, or None if custom."""
+    if not mailbox:
+        return None
+    lowered = mailbox.strip().lower()
+    if lowered in SECTION_ROLES:
+        return lowered
+    guessed = role_from_name(mailbox)
+    return guessed if guessed in SECTION_ROLES else None
+
+
+def resolve_mailbox_name(mailboxes: list[Mailbox], mailbox: str) -> str:
+    """Map a section role (archives) or alias (Archive) to the provider folder.
+
+    List and move share this so Gmail SPECIAL-USE names such as
+    ``[Gmail]/All Mail`` are used instead of a literal ``Archive`` mailbox.
+    """
+    role = section_role(mailbox)
+    if role:
+        match = mailbox_for_role(mailboxes, role)
+        if match:
+            return match.name
+    return mailbox
 
 
 @dataclass
