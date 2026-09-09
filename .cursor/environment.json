@@ -1,0 +1,10 @@
+{
+  "name": "Mailkit",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "mailkit-engine",
+      "command": "source .venv/bin/activate && mailkit service run"
+    }
+  ]
+}
