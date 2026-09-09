@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -73,6 +74,49 @@ def _row(store: Store, msg_id: str = "msg_1"):
 
 
 def test_messages_schema_has_answered_column(tmp_path):
+    store = Store(tmp_path)
+    cols = {row[1] for row in store.conn.execute("PRAGMA table_info(messages)")}
+    assert "answered" in cols
+
+
+def test_existing_db_migrates_answered_column(tmp_path):
+    from mailkit.paths import db_path
+
+    conn = sqlite3.connect(db_path(tmp_path))
+    conn.executescript(
+        """
+        CREATE TABLE messages (
+          id TEXT PRIMARY KEY,
+          account_id TEXT NOT NULL,
+          provider_id TEXT NOT NULL,
+          mailbox TEXT NOT NULL,
+          uid INTEGER,
+          uidvalidity INTEGER,
+          native_id TEXT,
+          message_id TEXT,
+          thread_id TEXT,
+          date TEXT,
+          subject TEXT,
+          from_json TEXT,
+          to_json TEXT,
+          cc_json TEXT,
+          flags_json TEXT,
+          labels_json TEXT,
+          tags_json TEXT,
+          unread INTEGER,
+          flagged INTEGER,
+          draft INTEGER,
+          has_attachments INTEGER,
+          attachment_types_json TEXT,
+          snippet TEXT,
+          size INTEGER,
+          payload_json TEXT,
+          updated_at TEXT
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
     store = Store(tmp_path)
     cols = {row[1] for row in store.conn.execute("PRAGMA table_info(messages)")}
     assert "answered" in cols
