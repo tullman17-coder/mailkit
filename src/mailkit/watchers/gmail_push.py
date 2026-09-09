@@ -13,6 +13,12 @@ from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
 from mailkit.providers.gmail import GmailProvider
+from mailkit.watchers.flag_diff import (
+    emit_typed_events,
+    find_indexed,
+    gmail_label_event_types,
+    persist_index_flags,
+)
 
 log = get_logger("mailkit.gmail_push")
 
@@ -134,15 +140,57 @@ class GmailPushWatcher:
                 )
             )
         for labels in item.get("labelsAdded") or []:
-            emit(
-                Event(
-                    id=new_id("evt"),
-                    ts=utcnow(),
-                    account_id=account.id,
-                    provider_id="gmail",
-                    mailbox=mailbox,
-                    type="message.updated",
-                    data={"labels_added": labels},
-                    idempotency_key=idempotency_key(account.id, mailbox, "labelsAdded", json.dumps(labels, sort_keys=True)),
-                )
+            self._emit_label_change(account, provider, mailbox, hid, labels, added=True, emit=emit)
+        for labels in item.get("labelsRemoved") or []:
+            self._emit_label_change(account, provider, mailbox, hid, labels, added=False, emit=emit)
+
+    def _emit_label_change(self, account, provider, mailbox, hid, labels, *, added: bool, emit) -> None:
+        gmail_id = (labels.get("message") or {}).get("id")
+        label_ids = labels.get("labelIds") or []
+        types = gmail_label_event_types(label_ids, added=added)
+        store = getattr(provider, "store", None)
+        row = find_indexed(store, account.id, gmail_id, mailbox)
+        summary = None
+        extra = {"gmail_id": gmail_id, "history_id": hid}
+        if types:
+            flagged = None
+            unread = None
+            if "message.flagged" in types:
+                flagged = True
+            if "message.unflagged" in types:
+                flagged = False
+            if "message.unread" in types:
+                unread = True
+            if "message.read" in types:
+                unread = False
+            if row:
+                persist_index_flags(store, row, flagged=flagged, unread=unread)
+                summary = store.get_message(row.get("id") or "") if store else None
+            extra["labels_added" if added else "labels_removed"] = labels
+            emit_typed_events(
+                account,
+                "gmail",
+                mailbox,
+                types,
+                emit,
+                native_id=gmail_id or hid,
+                thread_id=(labels.get("message") or {}).get("threadId") or "",
+                message=summary,
+                data=extra,
             )
+        other = [x for x in label_ids if str(x).upper() not in {"STARRED", "UNREAD"}]
+        if types and not other:
+            return
+        key = "labelsAdded" if added else "labelsRemoved"
+        emit(
+            Event(
+                id=new_id("evt"),
+                ts=utcnow(),
+                account_id=account.id,
+                provider_id="gmail",
+                mailbox=mailbox,
+                type="message.updated",
+                data={"labels_added" if added else "labels_removed": labels, "gmail_id": gmail_id},
+                idempotency_key=idempotency_key(account.id, mailbox, key, json.dumps(labels, sort_keys=True)),
+            )
+        )

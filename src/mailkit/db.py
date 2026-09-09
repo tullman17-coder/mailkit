@@ -185,6 +185,19 @@ class Store:
         data["tags"] = json.loads(row["tags_json"] or "[]")
         return data
 
+    def find_by_native(self, account_id: str, native_id: str, mailbox: str | None = None) -> dict | None:
+        sql = "SELECT payload_json, tags_json FROM messages WHERE account_id=? AND native_id=?"
+        args: list[Any] = [account_id, native_id]
+        if mailbox:
+            sql += " AND mailbox=?"
+            args.append(mailbox)
+        row = self.conn.execute(sql, args).fetchone()
+        if not row:
+            return None
+        data = json.loads(row["payload_json"])
+        data["tags"] = json.loads(row["tags_json"] or "[]")
+        return data
+
     def delete_message(self, message_id: str) -> None:
         self.conn.execute("DELETE FROM messages WHERE id=?", (message_id,))
         self.conn.commit()
