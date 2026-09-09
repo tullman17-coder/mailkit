@@ -316,6 +316,15 @@ def _truth(value) -> bool | None:
     return str(value).lower() in {"1", "true", "yes"}
 
 
+def _require_native_id(native, msg_id: str) -> str:
+    if native is None:
+        raise NotFoundError(f"Message {msg_id} has no IMAP UID")
+    uid = str(native).strip()
+    if not uid or uid.lower() in {"none", "null"}:
+        raise NotFoundError(f"Message {msg_id} has no IMAP UID")
+    return uid
+
+
 def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
     stored = app.runtime.store.get_message(msg_id)
     account_id = (stored or {}).get("account_id") or (qs.get("account") or [None])[0]
@@ -337,6 +346,7 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
             app.runtime.store.conn.commit()
         return ok({"moved": msg_id, "mailbox": dest, "account_id": acc.id})
     if action in {"flag", "unflag", "read", "unread"}:
+        uid = _require_native_id(native, msg_id)
         add, remove = [], []
         if action == "flag":
             add = ["Flagged"]
@@ -346,7 +356,7 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
             add = ["Seen"]
         else:
             remove = ["Seen"]
-        provider.set_flags(mailbox, str(native), add=add, remove=remove)
+        provider.set_flags(mailbox, uid, add=add, remove=remove)
         return ok({"id": msg_id, "action": action})
     if action == "tag":
         tags = body.get("tags") or body.get("tag") or []
