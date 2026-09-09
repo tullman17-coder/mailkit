@@ -14,8 +14,17 @@ from dataclasses import fields
 from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, infer_provider_id, save_config
 from mailkit.discovery import discover
 from mailkit.errors import NotFoundError, UsageError
-from mailkit.ids import new_id
-from mailkit.models import EventFilter, Mailbox, fail, ok, utcnow
+from mailkit.ids import idempotency_key, new_id
+from mailkit.models import (
+    FLAG_MUTATION_EVENTS,
+    Event,
+    EventFilter,
+    Mailbox,
+    apply_flag_mutation,
+    fail,
+    ok,
+    utcnow,
+)
 from mailkit.rules import Rule, RulesEngine, event_filter_match
 
 
@@ -356,6 +365,38 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
         provider.set_flags(mailbox, str(native), add=add, remove=remove)
         if stored:
             app.runtime.store.patch_message_flags(msg_id, add=add, remove=remove)
+        event_type = FLAG_MUTATION_EVENTS[action]
+        snapshot = apply_flag_mutation(
+            stored
+            or {
+                "id": msg_id,
+                "account_id": acc.id,
+                "provider_id": acc.provider,
+                "mailbox": mailbox,
+                "native_id": str(native) if native is not None else "",
+                "flags": [],
+            },
+            action,
+        )
+        app.bus.publish(
+            Event(
+                id=new_id("evt"),
+                ts=utcnow(),
+                account_id=acc.id,
+                provider_id=acc.provider,
+                mailbox=mailbox,
+                type=event_type,
+                thread_id=snapshot.get("thread_id") or "",
+                message=snapshot,
+                data={"action": action},
+                idempotency_key=idempotency_key(
+                    acc.id,
+                    mailbox,
+                    event_type,
+                    str(native or msg_id),
+                ),
+            )
+        )
         return ok({"id": msg_id, "action": action})
     if action == "tag":
         tags = body.get("tags") or body.get("tag") or []
