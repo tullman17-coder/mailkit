@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import fnmatch
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from mailkit.models import Message
+from mailkit.models import Message, utcnow
 from mailkit.plugins.types import HookAction, HookContext, HookPlugin
 
 UNSAFE_ACTIONS = {"delete", "purge", "drop"}
@@ -130,6 +131,66 @@ def apply_actions(actions: dict[str, Any]) -> HookAction:
         stop=bool(cleaned.get("stop")),
         extra={k: v for k, v in cleaned.items() if k not in {"tag", "untag", "move", "flag", "mark_read", "stop"}},
     )
+
+
+def canonical_flag(flag: str) -> str:
+    token = str(flag).lstrip("\\")
+    known = {"Seen", "Flagged", "Deleted", "Draft", "Answered", "Recent"}
+    capped = token.capitalize()
+    return capped if capped in known else token
+
+
+def apply_imap_flags(payload: dict, *, add: list[str] | None = None, remove: list[str] | None = None) -> dict:
+    """Return a copy of a message dict with flags/unread/flagged updated after IMAP STORE."""
+    flags = [canonical_flag(f) for f in (payload.get("flags") or [])]
+    drop = {canonical_flag(f) for f in (remove or [])}
+    flags = [f for f in flags if f not in drop]
+    for token in (canonical_flag(f) for f in (add or [])):
+        if token and token not in flags:
+            flags.append(token)
+    flag_set = {f.lower() for f in flags}
+    updated = dict(payload)
+    updated["flags"] = flags
+    updated["flagged"] = "flagged" in flag_set
+    updated["unread"] = "seen" not in flag_set
+    return updated
+
+
+def persist_imap_flags(store, message_id: str, *, add: list[str] | None = None, remove: list[str] | None = None) -> dict | None:
+    """Patch SQLite flags/unread/flagged after a successful IMAP STORE."""
+    row = store.get_message(message_id)
+    if not row:
+        return None
+    updated = apply_imap_flags(row, add=add, remove=remove)
+    store.conn.execute(
+        "UPDATE messages SET flagged=?, unread=?, flags_json=?, payload_json=?, updated_at=? WHERE id=?",
+        (
+            int(updated["flagged"]),
+            int(updated["unread"]),
+            json.dumps(updated["flags"]),
+            json.dumps(updated),
+            utcnow(),
+            message_id,
+        ),
+    )
+    store.conn.commit()
+    return updated
+
+
+def flag_event_types(*, add: list[str] | None = None, remove: list[str] | None = None) -> list[str]:
+    """Event types implied by a successful flag/read STORE."""
+    types: list[str] = []
+    add_set = {canonical_flag(f).lower() for f in (add or [])}
+    remove_set = {canonical_flag(f).lower() for f in (remove or [])}
+    if "flagged" in add_set:
+        types.append("message.flagged")
+    if "flagged" in remove_set:
+        types.append("message.unflagged")
+    if "seen" in add_set:
+        types.append("message.read")
+    if "seen" in remove_set:
+        types.append("message.unread")
+    return types
 
 
 def merge_actions(base: HookAction, extra: HookAction) -> HookAction:

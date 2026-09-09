@@ -9,11 +9,17 @@ from typing import Any
 from mailkit.backoff import Backoff
 from mailkit.config import AccountConfig
 from mailkit.events import EventBus
-from mailkit.ids import new_id
+from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
 from mailkit.plugins.types import HookAction, HookContext
-from mailkit.rules import RulesEngine, RulesHook
+from mailkit.rules import (
+    RulesEngine,
+    RulesHook,
+    apply_imap_flags,
+    flag_event_types,
+    persist_imap_flags,
+)
 from mailkit.runtime import Runtime
 
 log = get_logger("mailkit.supervisor")
@@ -85,9 +91,12 @@ class AccountWorker:
                 log.info("watch account=%s provider=%s watcher=%s", acc.id, provider.id, self.watcher_id)
 
                 def emit(event: Event, prov=provider) -> None:
+                    extras: list[Event] = []
                     if event.type == "message.created" and event.message:
-                        self._apply_hooks(prov, event)
+                        extras = self._apply_hooks(prov, event) or []
                     published = self.bus.publish(event)
+                    for extra in extras:
+                        self.bus.publish(extra)
                     if published and event.type == "message.created":
                         log.info("event %s account=%s mailbox=%s", event.type, event.account_id, event.mailbox)
 
@@ -124,7 +133,7 @@ class AccountWorker:
                 self.stop.wait(backoff.fail())
         self.status = "stopped"
 
-    def _apply_hooks(self, provider, event: Event) -> None:
+    def _apply_hooks(self, provider, event: Event) -> list[Event]:
         payload = event.message or {}
         # Reconstruct a Message-like object from summary for matching.
         msg = _message_from_summary(payload)
@@ -153,32 +162,38 @@ class AccountWorker:
                     break
         native = payload.get("native_id") or payload.get("uid")
         mailbox = event.mailbox
+        extras: list[Event] = []
+        if action.extra.get("matched_rules"):
+            event.data.setdefault("matched_rules", action.extra.get("matched_rules", []))
         if action.tag and payload.get("id"):
-            current = list(payload.get("tags") or [])
+            current = list((event.message or payload).get("tags") or payload.get("tags") or [])
             updated = self.runtime.store.set_tags(payload["id"], current + action.tag)
             if updated:
-                event.message = {**payload, "tags": updated.get("tags") or []}
-                event.data.setdefault("matched_rules", action.extra.get("matched_rules", []))
+                event.message = {**(event.message or payload), "tags": updated.get("tags") or []}
         if action.flag is True and native:
             try:
                 provider.set_flags(mailbox, str(native), add=["Flagged"])
+                extras.extend(self._sync_flags_after_store(event, add=["Flagged"]))
             except Exception as exc:
                 log.warning("flag failed: %s", exc)
         if action.flag is False and native:
             try:
                 provider.set_flags(mailbox, str(native), remove=["Flagged"])
+                extras.extend(self._sync_flags_after_store(event, remove=["Flagged"]))
             except Exception as exc:
                 log.warning("unflag failed: %s", exc)
         if action.mark_read is True and native:
             try:
                 provider.set_flags(mailbox, str(native), add=["Seen"])
-            except Exception:
-                pass
+                extras.extend(self._sync_flags_after_store(event, add=["Seen"]))
+            except Exception as exc:
+                log.warning("mark-read failed: %s", exc)
         if action.mark_read is False and native:
             try:
                 provider.set_flags(mailbox, str(native), remove=["Seen"])
-            except Exception:
-                pass
+                extras.extend(self._sync_flags_after_store(event, remove=["Seen"]))
+            except Exception as exc:
+                log.warning("mark-unread failed: %s", exc)
         if action.move and native:
             try:
                 provider.move(mailbox, str(native), action.move)
@@ -186,6 +201,44 @@ class AccountWorker:
                 event.data["moved_to"] = action.move
             except Exception as exc:
                 log.warning("rule move failed: %s", exc)
+        # Follow-up events carry the post-STORE snapshot (flag + read may both apply).
+        for extra in extras:
+            extra.message = event.message
+        return extras
+
+    def _sync_flags_after_store(self, event: Event, *, add: list[str] | None = None, remove: list[str] | None = None) -> list[Event]:
+        payload = event.message or {}
+        updated = apply_imap_flags(payload, add=add, remove=remove)
+        event.message = updated
+        msg_id = updated.get("id")
+        if msg_id:
+            persisted = persist_imap_flags(self.runtime.store, msg_id, add=add, remove=remove)
+            if persisted:
+                event.message = {
+                    **updated,
+                    "flags": persisted.get("flags") or updated["flags"],
+                    "flagged": persisted.get("flagged"),
+                    "unread": persisted.get("unread"),
+                    "tags": persisted.get("tags") if persisted.get("tags") is not None else updated.get("tags"),
+                }
+        native = str((event.message or {}).get("native_id") or (event.message or {}).get("uid") or "")
+        extras: list[Event] = []
+        for etype in flag_event_types(add=add, remove=remove):
+            extras.append(
+                Event(
+                    id=new_id("evt"),
+                    ts=utcnow(),
+                    account_id=event.account_id,
+                    provider_id=event.provider_id,
+                    mailbox=event.mailbox,
+                    type=etype,
+                    thread_id=event.thread_id,
+                    message=event.message,
+                    data={"matched_rules": event.data.get("matched_rules", [])},
+                    idempotency_key=idempotency_key(event.account_id, event.mailbox, etype, native),
+                )
+            )
+        return extras
 
 
 class Supervisor:
