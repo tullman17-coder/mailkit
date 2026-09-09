@@ -28,6 +28,33 @@ def test_spawned_child_never_opens_ui():
     assert frozen_dispatch_argv(["ignored-junk"], role="daemon") == daemon
 
 
+def test_nested_desktop_argv_never_opens_ui():
+    daemon = ["service", "run", "--background-child"]
+    assert frozen_dispatch_argv(["desktop"], role="daemon", spawn_gen=1) == daemon
+    assert frozen_dispatch_argv(["desktop"], role="daemon") == daemon
+    assert frozen_dispatch_argv(["desktop"], spawn_gen=1) == daemon
+    assert frozen_dispatch_argv(["-m", "mailkit", "desktop"], spawn_gen=1) == daemon
+    assert frozen_dispatch_argv(["-m", "mailkit", "desktop"], role="daemon") == daemon
+
+
+def test_nested_keeps_service_run_argv():
+    daemon = ["service", "run", "--background-child"]
+    assert frozen_dispatch_argv(daemon, role="daemon", spawn_gen=1) == daemon
+    assert frozen_dispatch_argv(["service", "run"], spawn_gen=1) == ["service", "run"]
+    assert frozen_dispatch_argv(["-m", "mailkit", *daemon], role="daemon") == daemon
+
+
+def test_nested_cli_heads_are_not_allowed_child_commands():
+    daemon = ["service", "run", "--background-child"]
+    assert frozen_dispatch_argv(["accounts", "list"], spawn_gen=1) == daemon
+    assert frozen_dispatch_argv(["doctor"], role="daemon") == daemon
+    assert frozen_dispatch_argv(["watch"], role="daemon", spawn_gen=1) == daemon
+
+
+def test_non_nested_desktop_still_dispatches_to_cli():
+    assert frozen_dispatch_argv(["desktop"]) == ["desktop"]
+
+
 def test_frozen_spawn_cmd_does_not_use_module_flag():
     cmd = daemon_spawn_cmd("/Applications/Mailkit.app/Contents/MacOS/Mailkit", frozen=True)
     assert cmd[0].endswith("Mailkit")
