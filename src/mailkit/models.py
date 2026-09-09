@@ -150,6 +150,33 @@ class Message:
         return self.to_dict(include_body=False)
 
 
+_SYSTEM_FLAGS = {"Seen", "Flagged", "Deleted", "Draft", "Answered", "Recent"}
+
+
+def canonical_flag(flag: str) -> str:
+    token = str(flag).lstrip("\\")
+    capped = token.capitalize()
+    return capped if capped in _SYSTEM_FLAGS else token
+
+
+def apply_system_flags(payload: dict, *, add: list[str] | None = None, remove: list[str] | None = None) -> dict:
+    """Return a copy of a cached message dict with IMAP system flags applied."""
+    flags = [canonical_flag(f) for f in (payload.get("flags") or [])]
+    drop = {canonical_flag(f) for f in (remove or [])}
+    flags = [f for f in flags if f not in drop]
+    for token in (canonical_flag(f) for f in (add or [])):
+        if token and token not in flags:
+            flags.append(token)
+    flag_set = {f.lower() for f in flags}
+    updated = dict(payload)
+    updated["flags"] = flags
+    updated["flagged"] = "flagged" in flag_set
+    updated["unread"] = "seen" not in flag_set
+    updated["draft"] = "draft" in flag_set
+    updated["answered"] = "answered" in flag_set
+    return updated
+
+
 @dataclass
 class Mailbox:
     schema: str = SCHEMA_MAILBOX
