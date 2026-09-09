@@ -15,6 +15,7 @@ from mailkit.models import Event, utcnow
 from mailkit.plugins.types import HookAction, HookContext
 from mailkit.rules import RulesEngine, RulesHook
 from mailkit.runtime import Runtime
+from mailkit.watchers.gmail_push import load_gmail_created_message
 
 log = get_logger("mailkit.supervisor")
 
@@ -85,6 +86,7 @@ class AccountWorker:
                 log.info("watch account=%s provider=%s watcher=%s", acc.id, provider.id, self.watcher_id)
 
                 def emit(event: Event, prov=provider) -> None:
+                    self._prepare_created_event(prov, event)
                     if event.type == "message.created" and event.message:
                         self._apply_hooks(prov, event)
                     published = self.bus.publish(event)
@@ -123,6 +125,19 @@ class AccountWorker:
                 self.status = "reconnecting"
                 self.stop.wait(backoff.fail())
         self.status = "stopped"
+
+    def _prepare_created_event(self, provider, event: Event) -> None:
+        if event.type != "message.created" or event.message:
+            return
+        gmail_id = (event.data or {}).get("gmail_id")
+        if not gmail_id:
+            return
+        msg = load_gmail_created_message(provider, event.mailbox, gmail_id)
+        if msg is None:
+            return
+        event.message = msg.summary()
+        if not event.thread_id:
+            event.thread_id = msg.thread_id
 
     def _apply_hooks(self, provider, event: Event) -> None:
         payload = event.message or {}
