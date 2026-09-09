@@ -1,9 +1,10 @@
-"""SQLite index for messages, events, subscriptions, cursors, and rules."""
+"""SQLite index for messages, events, subscriptions, webhooks, cursors, and rules."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -87,6 +88,19 @@ CREATE TABLE IF NOT EXISTS webhooks (
   created_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  webhook_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  last_error TEXT,
+  next_retry TEXT,
+  updated_at TEXT,
+  PRIMARY KEY (webhook_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status, next_retry);
+
 CREATE TABLE IF NOT EXISTS cursors (
   account_id TEXT NOT NULL,
   mailbox TEXT NOT NULL,
@@ -125,6 +139,7 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
 class Store:
     def __init__(self, root: Path | None = None):
         self.conn = connect(root)
+        self._lock = threading.Lock()
 
     def close(self) -> None:
         self.conn.close()
@@ -381,22 +396,97 @@ class Store:
 
     # --- webhooks ---
     def save_webhook(self, hook_id: str, name: str, url: str, filt: EventFilter, enabled: bool = True) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO webhooks (id, name, url, filter_json, enabled, created_at)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET name=excluded.name, url=excluded.url, filter_json=excluded.filter_json, enabled=excluded.enabled
-            """,
-            (hook_id, name, url, json.dumps(filt.to_dict()), int(enabled), utcnow()),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO webhooks (id, name, url, filter_json, enabled, created_at)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name, url=excluded.url, filter_json=excluded.filter_json, enabled=excluded.enabled
+                """,
+                (hook_id, name, url, json.dumps(filt.to_dict()), int(enabled), utcnow()),
+            )
+            self.conn.commit()
 
     def list_webhooks(self) -> list[dict]:
-        return [dict(r) for r in self.conn.execute("SELECT * FROM webhooks").fetchall()]
+        with self._lock:
+            return [dict(r) for r in self.conn.execute("SELECT * FROM webhooks ORDER BY rowid").fetchall()]
+
+    def get_webhook(self, hook_id: str) -> dict | None:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM webhooks WHERE id=?", (hook_id,)).fetchone()
+        return dict(row) if row else None
 
     def delete_webhook(self, hook_id: str) -> None:
-        self.conn.execute("DELETE FROM webhooks WHERE id=?", (hook_id,))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM webhook_deliveries WHERE webhook_id=?", (hook_id,))
+            self.conn.execute("DELETE FROM webhooks WHERE id=?", (hook_id,))
+            self.conn.commit()
+
+    def upsert_webhook_delivery(
+        self,
+        webhook_id: str,
+        event: dict,
+        *,
+        attempts: int,
+        status: str,
+        next_retry: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        event_id = event.get("id") or ""
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO webhook_deliveries (
+                  webhook_id, event_id, payload_json, attempts, status, last_error, next_retry, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(webhook_id, event_id) DO UPDATE SET
+                  payload_json=excluded.payload_json,
+                  attempts=excluded.attempts,
+                  status=excluded.status,
+                  last_error=excluded.last_error,
+                  next_retry=excluded.next_retry,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    webhook_id,
+                    event_id,
+                    json.dumps(event),
+                    attempts,
+                    status,
+                    error,
+                    next_retry,
+                    utcnow(),
+                ),
+            )
+            self.conn.commit()
+
+    def mark_webhook_delivered(self, webhook_id: str, event_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE webhook_deliveries
+                SET status='delivered', last_error=NULL, next_retry=NULL, updated_at=?
+                WHERE webhook_id=? AND event_id=?
+                """,
+                (utcnow(), webhook_id, event_id),
+            )
+            self.conn.commit()
+
+    def pending_webhook_deliveries(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM webhook_deliveries
+                WHERE status='pending'
+                ORDER BY next_retry, updated_at
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_webhook_deliveries(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM webhook_deliveries ORDER BY updated_at").fetchall()
+        return [dict(r) for r in rows]
 
     # --- cursors / rules ---
     def get_sync_cursor(self, account_id: str, mailbox: str, kind: str) -> str | None:
