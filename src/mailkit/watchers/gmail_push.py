@@ -11,7 +11,7 @@ from mailkit.config import AccountConfig
 from mailkit.httputil import request_json
 from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
-from mailkit.models import Event, utcnow
+from mailkit.models import Event, Message, utcnow
 from mailkit.providers.gmail import GmailProvider
 from mailkit.watchers.flag_diff import (
     emit_typed_events,
@@ -21,6 +21,33 @@ from mailkit.watchers.flag_diff import (
 )
 
 log = get_logger("mailkit.gmail_push")
+
+
+def load_gmail_created_message(provider, mailbox: str, gmail_id: str | None) -> Message | None:
+    """Resolve a Gmail API id to a Message whose id/native_id are IMAP-based."""
+    if not gmail_id:
+        return None
+    native = None
+    resolver = getattr(provider, "uid_for_gmail_id", None)
+    if callable(resolver):
+        try:
+            native = resolver(mailbox, gmail_id)
+        except Exception as exc:
+            log.info("gmail id → uid failed for %s: %s", gmail_id, exc)
+    if native:
+        try:
+            return provider.get_message(mailbox, str(native), peek=True)
+        except Exception as exc:
+            log.warning("gmail created IMAP fetch %s failed: %s", native, exc)
+    api = getattr(provider, "get_gmail_api_message", None)
+    if callable(api):
+        try:
+            msg = api(mailbox, gmail_id)
+            if msg is not None:
+                return msg
+        except Exception as exc:
+            log.warning("gmail API get %s failed: %s", gmail_id, exc)
+    return None
 
 
 class GmailPushWatcher:
@@ -113,6 +140,10 @@ class GmailPushWatcher:
         hid = str(item.get("id") or "")
         for added in item.get("messagesAdded") or []:
             gmail_id = (added.get("message") or {}).get("id")
+            msg = load_gmail_created_message(provider, mailbox, gmail_id)
+            if msg is None:
+                log.warning("gmail created skipped; no payload for %s", gmail_id)
+                continue
             emit(
                 Event(
                     id=new_id("evt"),
@@ -121,6 +152,8 @@ class GmailPushWatcher:
                     provider_id="gmail",
                     mailbox=mailbox,
                     type="message.created",
+                    thread_id=msg.thread_id,
+                    message=msg.summary(),
                     data={"gmail_id": gmail_id, "history_id": hid},
                     idempotency_key=idempotency_key(account.id, mailbox, "message.created", gmail_id or hid),
                 )

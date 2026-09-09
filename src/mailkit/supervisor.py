@@ -21,6 +21,7 @@ from mailkit.rules import (
     persist_imap_flags,
 )
 from mailkit.runtime import Runtime
+from mailkit.watchers.gmail_push import load_gmail_created_message
 
 log = get_logger("mailkit.supervisor")
 
@@ -114,6 +115,7 @@ class AccountWorker:
 
                 def emit(event: Event, prov=provider) -> None:
                     extras: list[Event] = []
+                    self._prepare_created_event(prov, event)
                     if event.type == "message.created" and event.message:
                         extras = self._apply_hooks(prov, event) or []
                     published = self.bus.publish(event)
@@ -156,6 +158,19 @@ class AccountWorker:
                 self.status = "reconnecting"
                 self.stop.wait(backoff.fail())
         self.status = "stopped"
+
+    def _prepare_created_event(self, provider, event: Event) -> None:
+        if event.type != "message.created" or event.message:
+            return
+        gmail_id = (event.data or {}).get("gmail_id")
+        if not gmail_id:
+            return
+        msg = load_gmail_created_message(provider, event.mailbox, gmail_id)
+        if msg is None:
+            return
+        event.message = msg.summary()
+        if not event.thread_id:
+            event.thread_id = msg.thread_id
 
     def _apply_hooks(self, provider, event: Event) -> list[Event]:
         payload = event.message or {}

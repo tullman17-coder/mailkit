@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 from mailkit.config import AccountConfig
 from mailkit.discovery import WELL_KNOWN
 from mailkit.httputil import request_json, urljoin
 from mailkit.logutil import get_logger
+from mailkit.models import Message
+from mailkit.parser import parse_rfc822
 from mailkit.providers.imap_smtp import ImapSmtpProvider
 
 log = get_logger("mailkit.gmail")
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1"
+
+
+def _b64url_decode(data: str) -> bytes:
+    pad = "=" * ((4 - len(data) % 4) % 4)
+    return base64.urlsafe_b64decode(data + pad)
 
 
 class GmailProvider(ImapSmtpProvider):
@@ -54,6 +62,64 @@ class GmailProvider(ImapSmtpProvider):
             token=token,
             body={"topicName": topic, "labelIds": ["INBOX"]},
         )
+
+    def uid_for_gmail_id(self, mailbox: str, gmail_id: str) -> str | None:
+        """Map a Gmail API hex id to an IMAP UID via X-GM-MSGID. Gmail ids are not UIDs."""
+        if not gmail_id:
+            return None
+        try:
+            msgid = int(str(gmail_id), 16)
+        except ValueError:
+            return None
+        try:
+            uids = self._search_uids(mailbox, ["X-GM-MSGID", str(msgid)])
+        except Exception as exc:
+            log.info("X-GM-MSGID search failed for %s: %s", gmail_id, exc)
+            return None
+        if not uids:
+            return None
+        return str(uids[0])
+
+    def get_gmail_api_message(self, mailbox: str, gmail_id: str) -> Message | None:
+        """Fetch RFC822 via users.messages.get and prefer the IMAP UID as native_id."""
+        token = self.secrets.get("access_token")
+        if not token or not gmail_id:
+            return None
+        payload = request_json(
+            urljoin(GMAIL_API, f"users/me/messages/{gmail_id}", format="raw"),
+            token=token,
+        )
+        if not isinstance(payload, dict) or not payload.get("raw"):
+            return None
+        raw = _b64url_decode(str(payload["raw"]))
+        uidvalidity = 0
+        try:
+            uidvalidity = self._select(mailbox, readonly=True) or 0
+        except Exception:
+            uidvalidity = 0
+        parsed = parse_rfc822(
+            raw,
+            account_id=self.account.id,
+            provider_id=self.id,
+            mailbox=mailbox,
+            uidvalidity=uidvalidity,
+        )
+        if parsed.message_id:
+            try:
+                uids = self._search_uids(mailbox, ["HEADER", "Message-ID", parsed.message_id])
+                if uids:
+                    return self.get_message(mailbox, str(uids[0]), peek=True)
+            except Exception as exc:
+                log.info("Message-ID search after Gmail API get failed: %s", exc)
+        uid = self.uid_for_gmail_id(mailbox, gmail_id)
+        if uid:
+            try:
+                return self.get_message(mailbox, uid, peek=True)
+            except Exception as exc:
+                log.info("IMAP fetch after Gmail API get failed: %s", exc)
+        if self.store:
+            self.store.upsert_message(parsed)
+        return parsed
 
 
 class GmailPlugin:
