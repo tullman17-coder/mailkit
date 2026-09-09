@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 from mailkit.db import Store
@@ -81,3 +82,48 @@ def test_durable_subscription_ack(tmp_path: Path):
     store.ack("sub1", ev.id, "acked")
     row = store.conn.execute("SELECT status FROM acks WHERE subscription_id='sub1'").fetchone()
     assert row["status"] == "acked"
+
+
+def test_stream_delivers_event_published_during_replay(tmp_path: Path):
+    """Events published between replay and live subscribe must still be delivered."""
+    store = Store(tmp_path)
+    bus = EventBus(store)
+    historical = bus.publish(
+        Event(id=new_id("evt"), account_id="work", provider_id="imap", mailbox="INBOX", type="message.created")
+    )
+    assert historical is not None
+
+    original_replay = bus.replay
+    gap_ids: list[str] = []
+
+    def replay_with_gap(filt, cursor, limit=100):
+        events = original_replay(filt, cursor, limit=limit)
+        gap = bus.publish(
+            Event(id=new_id("evt"), account_id="work", provider_id="imap", mailbox="INBOX", type="message.flagged")
+        )
+        assert gap is not None
+        gap_ids.append(gap.id)
+        return events
+
+    bus.replay = replay_with_gap  # type: ignore[method-assign]
+
+    received: list[dict] = []
+    stop = threading.Event()
+
+    def consume():
+        for ev in bus.stream(None, None, stop):
+            received.append(ev)
+            if gap_ids and any(e.get("id") == gap_ids[0] for e in received):
+                stop.set()
+                break
+
+    thread = threading.Thread(target=consume)
+    thread.start()
+    thread.join(timeout=3)
+    stop.set()
+    thread.join(timeout=2)
+
+    ids = [e["id"] for e in received]
+    assert historical.id in ids
+    assert gap_ids, "replay window did not publish a gap event"
+    assert gap_ids[0] in ids, f"event published during replay was dropped; got {ids}"

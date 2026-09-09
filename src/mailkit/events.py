@@ -76,17 +76,42 @@ class EventBus:
         return [e for e in events if event_filter_match(filt, e)]
 
     def stream(self, filt: EventFilter | None, cursor: str | None, stop: threading.Event):
-        """Yield historical events then live ones. Durable cursor is the last yielded id."""
-        for ev in self.replay(filt, cursor, limit=1000):
-            yield ev
-            cursor = ev.get("id")
+        """Yield historical events then live ones. Durable cursor is the last yielded id.
+
+        Subscribe before replay (same order as the WebSocket path) so a publish
+        during the replay window lands in the live queue instead of being dropped.
+        Drain that queue after replay and skip ids already yielded.
+        """
         q = self.subscribe_live(filt)
         try:
+            seen: set[str] = set()
+            for ev in self.replay(filt, cursor, limit=1000):
+                eid = ev.get("id")
+                if eid:
+                    seen.add(eid)
+                yield ev
+                cursor = eid
+            while True:
+                try:
+                    ev = q.get_nowait()
+                except queue.Empty:
+                    break
+                eid = ev.get("id")
+                if eid and eid in seen:
+                    continue
+                if eid:
+                    seen.add(eid)
+                yield ev
             while not stop.is_set():
                 try:
                     ev = q.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                eid = ev.get("id")
+                if eid and eid in seen:
+                    continue
+                if eid:
+                    seen.add(eid)
                 yield ev
         finally:
             self.unsubscribe_live(q)

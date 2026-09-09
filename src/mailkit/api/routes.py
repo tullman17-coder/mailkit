@@ -427,6 +427,7 @@ def _events(app: App, method: str, rest: list[str], qs: dict, body: dict, handle
         stop = threading.Event()
 
         def stream(wfile):
+            # bus.stream subscribes live before replay (WebSocket-safe order).
             for ev in app.bus.stream(filt, cursor, stop):
                 chunk = f"id: {ev.get('id')}\nevent: {ev.get('type')}\ndata: {json.dumps(ev)}\n\n"
                 wfile.write(chunk.encode("utf-8"))
