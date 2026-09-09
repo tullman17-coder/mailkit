@@ -152,6 +152,16 @@ def spawn_generation(env: dict[str, str] | None = None) -> int:
         return 0
 
 
+def _strip_module_prefix(argv: list[str]) -> list[str]:
+    if argv and argv[0] == "-m" and len(argv) >= 2 and argv[1] == "mailkit":
+        return argv[2:]
+    return argv
+
+
+def _is_service_run(argv: list[str]) -> bool:
+    return len(argv) >= 2 and argv[0] == "service" and argv[1] == "run"
+
+
 def frozen_dispatch_argv(
     argv: list[str],
     role: str | None = None,
@@ -160,17 +170,25 @@ def frozen_dispatch_argv(
     """CLI argv if this frozen process should not open a window. None = open UI.
 
     A nested spawn (MAILKIT_ROLE=daemon or MAILKIT_SPAWN_GEN>=1) must never
-    open the desktop. That is what froze Macs on v0.1.0.
+    open the desktop. That is what froze Macs on v0.1.0. Nested children
+    always get daemon argv unless they are already ``service run``; ``desktop``
+    is a CLI head and must not be treated as an allowed child command.
     """
     nested = role == "daemon" or spawn_gen > 0
+    module_style = bool(argv) and argv[0] == "-m" and len(argv) >= 2 and argv[1] == "mailkit"
+    rest = _strip_module_prefix(argv)
+
+    if nested:
+        if _is_service_run(rest):
+            return list(rest)
+        return list(_DAEMON_ARGV)
+
     if not argv:
-        return list(_DAEMON_ARGV) if nested else None
-    if argv[0] == "-m" and len(argv) >= 2 and argv[1] == "mailkit":
-        return argv[2:] or list(_DAEMON_ARGV)
+        return None
+    if module_style:
+        return rest or list(_DAEMON_ARGV)
     if argv[0] in _CLI_HEADS:
         return argv
-    if nested:
-        return list(_DAEMON_ARGV)
     return None
 
 
