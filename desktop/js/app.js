@@ -86,10 +86,11 @@
       .map((m) => {
         const unread = m.unread ? "" : " off";
         const current = state.current && state.current.id === m.id;
-        return `<li><button class="msg" type="button" data-id="${esc(m.id)}" aria-current="${current}">
+        const starred = m.flagged ? "★ " : "";
+        return `<li><button class="msg" type="button" data-id="${esc(m.id)}" data-flagged="${m.flagged ? "true" : "false"}" aria-current="${current}">
           <span class="dot${unread}" aria-hidden="true"></span>
           <span>
-            <span class="subject">${esc(m.subject || "(no subject)")}</span>
+            <span class="subject">${starred}${esc(m.subject || "(no subject)")}</span>
             <small class="mono">${esc(m.account_id || "")} · ${esc(fromAddr(m))}</small>
           </span>
         </button></li>`;
@@ -109,6 +110,8 @@
     const root = $("read");
     const m = state.current;
     $("flag-btn").disabled = !m;
+    $("flag-btn").textContent = m && m.flagged ? "Unstar" : "Star";
+    $("flag-btn").setAttribute("aria-pressed", String(!!(m && m.flagged)));
     $("archive-btn").disabled = !m;
     $("reply-btn").disabled = !m;
     if (!m) {
@@ -234,9 +237,13 @@
   });
   $("flag-btn").addEventListener("click", async () => {
     if (!state.current) return;
+    const id = state.current.id;
+    const action = state.current.flagged ? "unflag" : "flag";
     try {
-      await api("POST", `/v1/messages/${state.current.id}/flag`, {},);
-      toast("Starred.");
+      await api("POST", `/v1/messages/${encodeURIComponent(id)}/${action}`, {});
+      toast(action === "flag" ? "Starred." : "Unstarred.");
+      await loadMessages();
+      await openMessage(id);
     } catch (err) {
       toast(err.message);
     }
