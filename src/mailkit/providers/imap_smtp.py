@@ -246,20 +246,31 @@ class ImapSmtpProvider(BaseProvider):
                 existing = self.store.get_message(msg.id)
                 if existing:
                     msg.tags = existing.get("tags") or []
+                    if not msg.body_text:
+                        msg.body_text = existing.get("body_text")
+                    if not msg.body_html:
+                        msg.body_html = existing.get("body_html")
                 self.store.upsert_message(msg)
         return messages
 
     def get_message(self, mailbox: str, native_id: str, *, peek: bool = True) -> Message:
-        uidvalidity = self._select(mailbox, readonly=peek)
+        uid = str(native_id)
+        folder = mailbox
+        if self.store:
+            cached = self.store.get_message(str(native_id))
+            if cached:
+                uid = str(cached.get("native_id") or cached.get("uid") or native_id)
+                folder = cached.get("mailbox") or mailbox
+        uidvalidity = self._select(folder, readonly=peek)
         client = self._client()
         spec = "(FLAGS RFC822.SIZE INTERNALDATE BODY.PEEK[])" if peek else "(FLAGS RFC822.SIZE INTERNALDATE RFC822)"
         self.rate.consume()
-        typ, data = client.uid("FETCH", str(native_id), spec)
+        typ, data = client.uid("FETCH", uid, spec)
         if typ != "OK" or not data or data[0] is None:
-            raise NotFoundError(f"Message {native_id} not found in {mailbox}")
-        parsed = self._parse_fetch(mailbox, uidvalidity, data, peek=peek)
+            raise NotFoundError(f"Message {uid} not found in {folder}")
+        parsed = self._parse_fetch(folder, uidvalidity, data, peek=peek)
         if not parsed:
-            raise NotFoundError(f"Message {native_id} not found in {mailbox}")
+            raise NotFoundError(f"Message {uid} not found in {folder}")
         msg = parsed[0]
         if self.store:
             existing = self.store.get_message(msg.id)
