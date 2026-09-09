@@ -13,6 +13,46 @@ from mailkit.models import Event, utcnow
 
 log = get_logger("mailkit.poll")
 
+UID_CURSOR_KIND = "uid"
+
+
+def load_uid_cursor(provider: Any, account_id: str, mailbox: str) -> int:
+    """Restore the shared IMAP UID high-water mark used by poll and IDLE."""
+    store = getattr(provider, "store", None)
+    if not store:
+        return 0
+    raw = store.get_sync_cursor(account_id, mailbox, UID_CURSOR_KIND)
+    if not raw:
+        return 0
+    return int(raw)
+
+
+def save_uid_cursor(provider: Any, account_id: str, mailbox: str, last_uid: int) -> None:
+    store = getattr(provider, "store", None)
+    if store:
+        store.set_sync_cursor(account_id, mailbox, UID_CURSOR_KIND, str(last_uid))
+
+
+def emit_message_created(account, provider, mailbox, uid, emit) -> None:
+    try:
+        msg = provider.get_message(mailbox, str(uid), peek=True)
+    except Exception as exc:
+        log.warning("fetch uid %s failed: %s", uid, exc)
+        return
+    emit(
+        Event(
+            id=new_id("evt"),
+            ts=utcnow(),
+            account_id=account.id,
+            provider_id=provider.id,
+            mailbox=mailbox,
+            type="message.created",
+            thread_id=msg.thread_id,
+            message=msg.summary(),
+            idempotency_key=idempotency_key(account.id, mailbox, "message.created", str(uid)),
+        )
+    )
+
 
 class PollWatcher:
     plugin_type = "watcher"
@@ -25,11 +65,7 @@ class PollWatcher:
         mailbox = account.folders.inbox or "INBOX"
         interval = max(15, int(account.poll_interval or 45))
         backoff = Backoff(initial=interval, maximum=300)
-        last_uid = 0
-        if getattr(provider, "store", None):
-            raw = provider.store.get_sync_cursor(account.id, mailbox, "uid")
-            if raw:
-                last_uid = int(raw)
+        last_uid = load_uid_cursor(provider, account.id, mailbox)
         while not stop.is_set():
             try:
                 provider.connect()
@@ -50,7 +86,7 @@ class PollWatcher:
                         )
                     )
                     for uid in recent:
-                        _emit_created(account, provider, mailbox, uid, emit)
+                        emit_message_created(account, provider, mailbox, uid, emit)
                     emit(
                         Event(
                             id=new_id("evt"),
@@ -67,32 +103,10 @@ class PollWatcher:
                         if uid <= last_uid:
                             continue
                         last_uid = uid
-                        _emit_created(account, provider, mailbox, uid, emit)
-                if getattr(provider, "store", None):
-                    provider.store.set_sync_cursor(account.id, mailbox, "uid", str(last_uid))
+                        emit_message_created(account, provider, mailbox, uid, emit)
+                save_uid_cursor(provider, account.id, mailbox, last_uid)
                 backoff.reset()
                 stop.wait(interval)
             except Exception as exc:
                 log.warning("poll error account=%s: %s", account.id, exc)
                 stop.wait(backoff.fail())
-
-
-def _emit_created(account, provider, mailbox, uid, emit) -> None:
-    try:
-        msg = provider.get_message(mailbox, str(uid), peek=True)
-    except Exception as exc:
-        log.warning("poll fetch %s failed: %s", uid, exc)
-        return
-    emit(
-        Event(
-            id=new_id("evt"),
-            ts=utcnow(),
-            account_id=account.id,
-            provider_id=provider.id,
-            mailbox=mailbox,
-            type="message.created",
-            thread_id=msg.thread_id,
-            message=msg.summary(),
-            idempotency_key=idempotency_key(account.id, mailbox, "message.created", str(uid)),
-        )
-    )
