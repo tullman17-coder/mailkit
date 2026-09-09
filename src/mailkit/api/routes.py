@@ -484,6 +484,8 @@ def _events(app: App, method: str, rest: list[str], qs: dict, body: dict, handle
     if rest == ["stream"] and method == "GET":
         filt = EventFilter.from_dict({k: v[0] if len(v) == 1 else v for k, v in qs.items() if k not in {"token", "cursor"}})
         cursor = (qs.get("cursor") or [None])[0]
+        if not cursor and handler is not None:
+            cursor = handler.headers.get("Last-Event-ID") or None
         stop = threading.Event()
 
         def stream(wfile):
