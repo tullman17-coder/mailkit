@@ -217,20 +217,35 @@ def _qbool(qs, name):
     return raw.lower() in {"1", "true", "yes"}
 
 
+def _payload_has_body(payload: dict | None) -> bool:
+    if not payload:
+        return False
+    return bool(payload.get("body_text") or payload.get("body_html"))
+
+
+def _needs_live_body(stored: dict | None, qs: dict) -> bool:
+    if _qbool(qs, "body") is True:
+        return True
+    return not _payload_has_body(stored)
+
+
 def _messages(app: App, method: str, rest: list[str], qs: dict, body: dict):
     if rest and rest[0] == "search" and method in {"GET", "POST"}:
         params = {**{k: v[0] if v else "" for k, v in qs.items()}, **body}
         return _list_messages(app, params)
     if rest and method == "GET" and rest[0] not in {"search"}:
-        msg = app.runtime.store.get_message(rest[0])
-        if msg:
-            return ok(msg)
-        # live fetch
-        account_id = (qs.get("account") or [None])[0]
-        mailbox = (qs.get("mailbox") or ["INBOX"])[0]
+        stored = app.runtime.store.get_message(rest[0])
+        if not _needs_live_body(stored, qs):
+            return ok(stored)
+        account_id = (stored or {}).get("account_id") or (qs.get("account") or [None])[0]
+        mailbox = (stored or {}).get("mailbox") or (qs.get("mailbox") or ["INBOX"])[0]
+        native = (stored or {}).get("native_id") or (stored or {}).get("uid") or rest[0]
         acc = app.runtime.config.require_account(account_id)
         provider, _, _ = app.runtime.provider_for(acc.id)
-        fetched = provider.get_message(mailbox, rest[0], peek=True)
+        fetched = provider.get_message(mailbox, str(native), peek=True)
+        if stored and not fetched.tags:
+            fetched.tags = stored.get("tags") or []
+        app.runtime.store.upsert_message(fetched)
         return ok(fetched.to_dict())
     if rest and method == "POST" and len(rest) >= 2:
         msg_id = rest[0]

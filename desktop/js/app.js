@@ -167,7 +167,7 @@
 
   async function openMessage(id) {
     try {
-      state.current = await api("GET", `/v1/messages/${encodeURIComponent(id)}?account=${encodeURIComponent(state.account)}&mailbox=${encodeURIComponent(state.mailbox)}`);
+      state.current = await api("GET", `/v1/messages/${encodeURIComponent(id)}?account=${encodeURIComponent(state.account)}&mailbox=${encodeURIComponent(state.mailbox)}&body=1`);
     } catch (err) {
       toast(err.message);
       return;
