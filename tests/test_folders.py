@@ -1,4 +1,11 @@
-from mailkit.folders import build_folder_map, parse_list_line, role_from_attrs, role_from_name
+from mailkit.folders import (
+    build_folder_map,
+    parse_list_line,
+    resolve_mailbox_name,
+    role_from_attrs,
+    role_from_name,
+    section_role,
+)
 from mailkit.models import Mailbox
 
 
@@ -49,3 +56,17 @@ def test_overrides_win_and_section_order():
 
 def test_yahoo_bulk_is_junk():
     assert role_from_name("Bulk Mail") == "junk"
+
+
+def test_resolve_archives_uses_gmail_all_mail():
+    listed = [
+        Mailbox(name="INBOX", role="inbox"),
+        Mailbox(name="[Gmail]/All Mail", role="archives"),
+        Mailbox(name="[Gmail]/Sent Mail", role="sent"),
+    ]
+    assert section_role("archives") == "archives"
+    assert section_role("Archive") == "archives"
+    assert resolve_mailbox_name(listed, "archives") == "[Gmail]/All Mail"
+    assert resolve_mailbox_name(listed, "Archive") == "[Gmail]/All Mail"
+    assert resolve_mailbox_name(listed, "Receipts") == "Receipts"
+    assert resolve_mailbox_name(listed, "inbox") == "INBOX"
