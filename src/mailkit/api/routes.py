@@ -14,6 +14,7 @@ from dataclasses import fields
 from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, save_config
 from mailkit.discovery import discover
 from mailkit.errors import NotFoundError, UsageError
+from mailkit.folders import mailbox_for_role, resolve_mailbox_name, section_role
 from mailkit.ids import new_id
 from mailkit.models import EventFilter, Mailbox, fail, ok, utcnow
 from mailkit.rules import Rule, RulesEngine, event_filter_match
@@ -262,13 +263,13 @@ def _list_messages(app: App, params: dict):
         )
         return ok(rows)
     acc = app.runtime.config.require_account(account_id)
-    # Resolve section names like inbox/saved/sent
+    # Resolve section names like inbox/saved/sent via SPECIAL-USE role
     provider, account, _ = app.runtime.provider_for(acc.id)
     boxes = provider.list_mailboxes()
     folder = mailbox
-    if mailbox.lower() in {"inbox", "saved", "sent", "drafts", "archives", "trash", "junk"}:
-        role = mailbox.lower()
-        match = next((b for b in boxes if getattr(b, "role", "") == role), None)
+    role = section_role(mailbox)
+    if role:
+        match = mailbox_for_role(boxes, role)
         if role == "saved" and (not match or match.name.upper() == "INBOX"):
             folder = match.name if match else "INBOX"
             params["flagged"] = "true"
@@ -327,6 +328,8 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
         dest = body.get("mailbox") or body.get("dest")
         if not dest:
             raise UsageError("move requires mailbox")
+        boxes = provider.list_mailboxes()
+        dest = resolve_mailbox_name(boxes, dest)
         provider.move(mailbox, str(native), dest)
         if stored:
             stored["mailbox"] = dest
