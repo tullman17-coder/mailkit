@@ -70,3 +70,41 @@ class RateLimitError(MailkitError):
 class ConfigError(MailkitError):
     exit_code = ExitCode.USAGE
     code = "config"
+
+
+_CODE_TYPES: dict[str, type[MailkitError]] = {
+    "usage": UsageError,
+    "not_found": NotFoundError,
+    "auth": AuthError,
+    "network": NetworkError,
+    "daemon": DaemonError,
+    "conflict": ConflictError,
+    "rate_limit": RateLimitError,
+    "config": ConfigError,
+}
+
+_STATUS_TYPES: dict[int, type[MailkitError]] = {
+    401: AuthError,
+    403: AuthError,
+    404: NotFoundError,
+    409: ConflictError,
+    429: RateLimitError,
+}
+
+
+def from_api_error(
+    message: str,
+    *,
+    code: str | None = None,
+    details: dict | None = None,
+    status: int | None = None,
+) -> MailkitError:
+    """Map a daemon JSON error.code and/or HTTP status onto a typed MailkitError."""
+    details = dict(details or {})
+    resolved = code or details.get("code") or ""
+    cls = _CODE_TYPES.get(resolved)
+    if cls is None and status is not None:
+        cls = _STATUS_TYPES.get(status)
+        if cls is None and status >= 500:
+            cls = DaemonError
+    return (cls or MailkitError)(message, details=details)
