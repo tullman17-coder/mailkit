@@ -44,9 +44,15 @@ class ImapSmtpProvider(BaseProvider):
         self.rate = TokenBucket(rate=4.0, burst=10.0)
         self._auth = XOAuth2Auth() if account.auth in {"oauth2", "xoauth2"} else PasswordAuth()
         self.folder_map = None
+        self._imap_caps: set[str] = set()
+
+    def imap_capability_tokens(self) -> set[str]:
+        return set(self._imap_caps)
 
     def capabilities(self) -> set[str]:
-        caps = {"list", "read", "search", "move", "flags", "send", "idle"}
+        caps = {"list", "read", "search", "move", "flags", "send"}
+        if "IDLE" in self._imap_caps:
+            caps.add("idle")
         return caps
 
     def connect(self) -> imaplib.IMAP4:
@@ -57,6 +63,7 @@ class ImapSmtpProvider(BaseProvider):
                     return self._imap
                 except Exception:
                     self._imap = None
+                    self._imap_caps = set()
             host = self.account.imap.host
             port = self.account.imap.port
             if not host:
@@ -81,6 +88,7 @@ class ImapSmtpProvider(BaseProvider):
                 client.enable("UTF8=ACCEPT")
             except Exception:
                 pass
+            self._imap_caps = _capability_tokens(client)
             if self.vault is not None:
                 try:
                     self.vault.put_account(self.account.id, self.secrets)
@@ -102,6 +110,7 @@ class ImapSmtpProvider(BaseProvider):
                         pass
                 self._imap = None
                 self._selected = None
+                self._imap_caps = set()
 
     def _client(self) -> imaplib.IMAP4:
         return self.connect()
@@ -350,6 +359,7 @@ class ImapSmtpProvider(BaseProvider):
             if self.account.imap.starttls:
                 client.starttls(ssl_context=_ssl_context())
         self._auth.prepare_imap(client, self.account, self.secrets)
+        self._imap_caps = _capability_tokens(client)
         return client
 
 
@@ -363,6 +373,39 @@ class ImapSmtpPlugin:
 
     def create(self, account: AccountConfig, secrets: dict[str, Any], *, store=None) -> ImapSmtpProvider:
         return ImapSmtpProvider(account, secrets, store=store)
+
+
+def _capability_tokens(client) -> set[str]:
+    """Parse IMAP CAPABILITY tokens from greeting plus a post-auth probe."""
+    tokens: set[str] = set()
+
+    def _add(value) -> None:
+        if value is None:
+            return
+        if isinstance(value, (bytes, bytearray)):
+            text = value.decode("utf-8", "replace")
+        else:
+            text = str(value)
+        tokens.update(part.upper() for part in text.split() if part)
+
+    raw = getattr(client, "capabilities", None)
+    if raw:
+        if isinstance(raw, (str, bytes, bytearray)):
+            _add(raw)
+        else:
+            try:
+                for item in raw:
+                    _add(item)
+            except TypeError:
+                _add(raw)
+    try:
+        typ, data = client.capability()
+    except Exception:
+        return tokens
+    if typ == "OK" and data:
+        for item in data:
+            _add(item)
+    return tokens
 
 
 def _flag_token(flag: str) -> str:

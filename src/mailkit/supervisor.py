@@ -38,6 +38,8 @@ def choose_watcher(account: AccountConfig, provider: Any, plugins) -> Any:
                     continue
             if name == "graph_push" and getattr(provider, "id", "") != "graph":
                 continue
+            if name == "idle" and "idle" not in caps:
+                continue
             if watcher.supports(account, provider):
                 return watcher
     return plugins.watcher_for("poll")
@@ -76,6 +78,8 @@ class AccountWorker:
             self.last_start = time.time()
             try:
                 provider, acc, _secrets = self.runtime.provider_for(self.account.id)
+                if hasattr(provider, "connect"):
+                    provider.connect()
                 watcher = choose_watcher(acc, provider, self.runtime.plugins)
                 if watcher is None:
                     raise RuntimeError("no watcher plugin available")

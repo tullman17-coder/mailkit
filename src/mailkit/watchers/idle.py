@@ -22,6 +22,9 @@ class IdleWatcher:
     id = "idle"
 
     def supports(self, account: AccountConfig, provider: Any) -> bool:
+        tokens_fn = getattr(provider, "imap_capability_tokens", None)
+        if callable(tokens_fn):
+            return "IDLE" in {str(t).upper() for t in tokens_fn()}
         return "idle" in getattr(provider, "capabilities", lambda: set())()
 
     def watch(self, account: AccountConfig, provider: ImapSmtpProvider, emit: Callable[[Event], None], stop: threading.Event) -> None:
