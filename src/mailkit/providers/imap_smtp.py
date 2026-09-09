@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import imaplib
 import smtplib
+import socket
 import ssl
 import threading
+import time
 from email.utils import make_msgid
 from typing import Any
 
@@ -29,6 +31,65 @@ def _ssl_context() -> ssl.SSLContext:
     return ctx
 
 
+def _shutdown_sock(sock: socket.socket | None) -> None:
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+    try:
+        sock.close()
+    except Exception:
+        pass
+
+
+def _create_connection(host: str, port: int, timeout: float | None, stop: threading.Event | None) -> socket.socket:
+    overall = 30.0 if timeout is None else float(timeout)
+    if stop is None:
+        return socket.create_connection((host, port), timeout=overall)
+    deadline = time.time() + overall
+    last_exc: Exception | None = None
+    while True:
+        if stop.is_set():
+            raise NetworkError("IMAP connect aborted")
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise TimeoutError("timed out") from last_exc
+        try:
+            return socket.create_connection((host, port), timeout=min(1.0, remaining))
+        except TimeoutError as exc:
+            last_exc = exc
+
+
+class _AbortableIMAP4(imaplib.IMAP4):
+    def __init__(self, host: str, port: int, timeout: float | None, provider: "ImapSmtpProvider"):
+        self._mailkit_provider = provider
+        super().__init__(host, port, timeout=timeout)
+
+    def _create_socket(self, timeout):
+        sock = _create_connection(self.host, self.port, timeout, self._mailkit_provider._stop)
+        self._mailkit_provider._register_socket(sock)
+        return sock
+
+
+class _AbortableIMAP4SSL(imaplib.IMAP4_SSL):
+    def __init__(self, host: str, port: int, ssl_context, timeout: float | None, provider: "ImapSmtpProvider"):
+        self._mailkit_provider = provider
+        super().__init__(host, port, ssl_context=ssl_context, timeout=timeout)
+
+    def _create_socket(self, timeout):
+        sock = _create_connection(self.host, self.port, timeout, self._mailkit_provider._stop)
+        self._mailkit_provider._register_socket(sock)
+        try:
+            wrapped = self.ssl_context.wrap_socket(sock, server_hostname=self.host)
+        except Exception:
+            _shutdown_sock(sock)
+            raise
+        self._mailkit_provider._register_socket(wrapped)
+        return wrapped
+
+
 class ImapSmtpProvider(BaseProvider):
     id = "imap"
 
@@ -45,9 +106,34 @@ class ImapSmtpProvider(BaseProvider):
         self._auth = XOAuth2Auth() if account.auth in {"oauth2", "xoauth2"} else PasswordAuth()
         self.folder_map = None
         self._imap_caps: set[str] = set()
+        self._stop: threading.Event | None = None
+        self._idle: imaplib.IMAP4 | None = None
+        self._pending: list[socket.socket] = []
+        self._abort_thread: threading.Thread | None = None
 
     def imap_capability_tokens(self) -> set[str]:
         return set(self._imap_caps)
+
+    def set_stop(self, stop: threading.Event | None) -> None:
+        self._stop = stop
+        if stop is None:
+            return
+        existing = self._abort_thread
+        if existing is not None and existing.is_alive():
+            return
+
+        def abort():
+            stop.wait()
+            self.close()
+
+        self._abort_thread = threading.Thread(target=abort, name=f"mailkit-imap-abort-{self.account.id}", daemon=True)
+        self._abort_thread.start()
+
+    def _register_socket(self, sock: socket.socket) -> None:
+        self._pending.append(sock)
+        if self._stop is not None and self._stop.is_set():
+            _shutdown_sock(sock)
+            raise NetworkError(f"IMAP connect aborted for {self.account.id}")
 
     def capabilities(self) -> set[str]:
         caps = {"list", "read", "search", "move", "flags", "send"}
@@ -64,53 +150,78 @@ class ImapSmtpProvider(BaseProvider):
                 except Exception:
                     self._imap = None
                     self._imap_caps = set()
+            if self._stop is not None and self._stop.is_set():
+                raise NetworkError(f"IMAP connect aborted for {self.account.id}")
             host = self.account.imap.host
             port = self.account.imap.port
             if not host:
                 raise NetworkError(f"Account {self.account.id} has no IMAP host")
             timeout = self.account.imap.timeout
+        try:
+            if self.account.imap.tls:
+                client: imaplib.IMAP4 = _AbortableIMAP4SSL(host, port, _ssl_context(), timeout, self)
+            else:
+                client = _AbortableIMAP4(host, port, timeout, self)
+                if self.account.imap.starttls:
+                    client.starttls(ssl_context=_ssl_context())
+        except NetworkError:
+            raise
+        except Exception as exc:
+            if self._stop is not None and self._stop.is_set():
+                raise NetworkError(f"IMAP connect aborted for {self.account.id}") from exc
+            raise NetworkError(f"IMAP connect failed for {self.account.id}: {exc}") from exc
+        if self._stop is not None and self._stop.is_set():
             try:
-                if self.account.imap.tls:
-                    client: imaplib.IMAP4 = imaplib.IMAP4_SSL(host, port, ssl_context=_ssl_context(), timeout=timeout)
-                else:
-                    client = imaplib.IMAP4(host, port, timeout=timeout)
-                    if self.account.imap.starttls:
-                        client.starttls(ssl_context=_ssl_context())
-            except Exception as exc:
-                raise NetworkError(f"IMAP connect failed for {self.account.id}: {exc}") from exc
-            try:
-                self._auth.prepare_imap(client, self.account, self.secrets)
-            except AuthError:
-                raise
-            except Exception as exc:
-                raise AuthError(f"IMAP auth failed for {self.account.id}: {exc}") from exc
-            try:
-                client.enable("UTF8=ACCEPT")
+                _shutdown_sock(client.socket())
             except Exception:
                 pass
-            self._imap_caps = _capability_tokens(client)
-            if self.vault is not None:
-                try:
-                    self.vault.put_account(self.account.id, self.secrets)
-                except Exception as exc:
-                    log.warning("could not persist secrets for %s: %s", self.account.id, exc)
+            raise NetworkError(f"IMAP connect aborted for {self.account.id}")
+        try:
+            self._auth.prepare_imap(client, self.account, self.secrets)
+        except AuthError:
+            raise
+        except Exception as exc:
+            raise AuthError(f"IMAP auth failed for {self.account.id}: {exc}") from exc
+        try:
+            client.enable("UTF8=ACCEPT")
+        except Exception:
+            pass
+        self._imap_caps = _capability_tokens(client)
+        if self.vault is not None:
+            try:
+                self.vault.put_account(self.account.id, self.secrets)
+            except Exception as exc:
+                log.warning("could not persist secrets for %s: %s", self.account.id, exc)
+        with self._lock:
             self._imap = client
-            log.info("connected imap account=%s host=%s", self.account.id, host)
-            return client
+        log.info("connected imap account=%s host=%s", self.account.id, host)
+        return client
 
     def close(self) -> None:
+        pending = list(self._pending)
+        self._pending.clear()
+        for sock in pending:
+            _shutdown_sock(sock)
         with self._lock:
-            if self._imap is not None:
+            for attr in ("_imap", "_idle"):
+                client = getattr(self, attr)
+                if client is None:
+                    continue
                 try:
-                    self._imap.logout()
+                    client.logout()
                 except Exception:
                     try:
-                        self._imap.shutdown()
+                        sock = client.socket()
+                    except Exception:
+                        sock = None
+                    _shutdown_sock(sock)
+                    try:
+                        client.shutdown()
                     except Exception:
                         pass
-                self._imap = None
-                self._selected = None
-                self._imap_caps = set()
+                setattr(self, attr, None)
+            self._selected = None
+            self._imap_caps = set()
 
     def _client(self) -> imaplib.IMAP4:
         return self.connect()
@@ -349,17 +460,37 @@ class ImapSmtpProvider(BaseProvider):
 
     def open_idle_client(self) -> imaplib.IMAP4:
         """Dedicated IMAP connection for IDLE so command traffic is not blocked."""
+        if self._stop is not None and self._stop.is_set():
+            raise NetworkError(f"IMAP connect aborted for {self.account.id}")
         host = self.account.imap.host
         port = self.account.imap.port
-        timeout = None  # IDLE must not use a short socket timeout
-        if self.account.imap.tls:
-            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(host, port, ssl_context=_ssl_context(), timeout=timeout)
-        else:
-            client = imaplib.IMAP4(host, port, timeout=timeout)
-            if self.account.imap.starttls:
-                client.starttls(ssl_context=_ssl_context())
+        timeout = self.account.imap.timeout
+        try:
+            if self.account.imap.tls:
+                client: imaplib.IMAP4 = _AbortableIMAP4SSL(host, port, _ssl_context(), timeout, self)
+            else:
+                client = _AbortableIMAP4(host, port, timeout, self)
+                if self.account.imap.starttls:
+                    client.starttls(ssl_context=_ssl_context())
+        except NetworkError:
+            raise
+        except Exception as exc:
+            if self._stop is not None and self._stop.is_set():
+                raise NetworkError(f"IMAP connect aborted for {self.account.id}") from exc
+            raise NetworkError(f"IMAP connect failed for {self.account.id}: {exc}") from exc
+        if self._stop is not None and self._stop.is_set():
+            try:
+                _shutdown_sock(client.socket())
+            except Exception:
+                pass
+            raise NetworkError(f"IMAP connect aborted for {self.account.id}")
         self._auth.prepare_imap(client, self.account, self.secrets)
         self._imap_caps = _capability_tokens(client)
+        try:
+            client.sock.settimeout(None)
+        except Exception:
+            pass
+        self._idle = client
         return client
 
 

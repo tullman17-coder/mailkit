@@ -57,27 +57,45 @@ class AccountWorker:
         self.watcher_id = ""
         self.restarts = 0
         self.last_start = 0.0
+        self._provider = None
 
     def start(self) -> None:
         self.stop.clear()
+        self.status = "connecting"
+        self.last_start = time.time()
         self.thread = threading.Thread(target=self._run, name=f"mailkit-{self.account.id}", daemon=True)
         self.thread.start()
 
     def join(self, timeout: float | None = None) -> None:
         self.stop.set()
+        provider = self._provider
+        if provider is not None:
+            try:
+                provider.close()
+            except Exception:
+                pass
         if self.thread:
             self.thread.join(timeout=timeout)
 
     def alive(self) -> bool:
-        return bool(self.thread and self.thread.is_alive() and self.status in {"running", "reconnecting"})
+        # A worker is live as soon as its thread exists, including the IMAP
+        # connect window when status is still "connecting"/"stopped".
+        return bool(self.thread and self.thread.is_alive())
 
     def _run(self) -> None:
         backoff = Backoff(initial=1.0, maximum=120.0)
         while not self.stop.is_set():
             provider = None
+            self.status = "connecting"
             self.last_start = time.time()
             try:
                 provider, acc, _secrets = self.runtime.provider_for(self.account.id)
+                self._provider = provider
+                setter = getattr(provider, "set_stop", None)
+                if callable(setter):
+                    setter(self.stop)
+                if self.stop.is_set():
+                    break
                 if hasattr(provider, "connect"):
                     provider.connect()
                 watcher = choose_watcher(acc, provider, self.runtime.plugins)
@@ -123,6 +141,8 @@ class AccountWorker:
                         provider.close()
                     except Exception:
                         pass
+                if self._provider is provider:
+                    self._provider = None
             if not self.stop.is_set():
                 self.status = "reconnecting"
                 self.stop.wait(backoff.fail())
@@ -213,9 +233,23 @@ class Supervisor:
     def stop_account(self, account_id: str) -> None:
         worker = self.workers.pop(account_id, None)
         if worker:
-            worker.join(timeout=5)
+            # IMAP connect can take the full account timeout (default 30s) and
+            # used to outlive a 5s join, so start_account spawned a duplicate.
+            worker.join()
+
+    def request_stop(self) -> None:
+        """Abort in-flight connect/IDLE so join() does not wait on a 30s handshake."""
+        for worker in self.workers.values():
+            worker.stop.set()
+            provider = getattr(worker, "_provider", None)
+            if provider is not None:
+                try:
+                    provider.close()
+                except Exception:
+                    pass
 
     def stop_all(self) -> None:
+        self.request_stop()
         for account_id in list(self.workers):
             self.stop_account(account_id)
 
