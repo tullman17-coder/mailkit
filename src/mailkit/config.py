@@ -81,6 +81,11 @@ class AccountConfig:
     def display_name(self) -> str:
         return self.name or self.address or self.id
 
+    def resolved_provider(self) -> str:
+        """Concrete plugin id: honor an explicit choice, else address/host."""
+        host = self.imap.host if self.imap else ""
+        return infer_provider_id(self.address, host, explicit=self.provider)
+
 
 @dataclass
 class DaemonSettings:
@@ -123,6 +128,34 @@ class AppConfig:
         if aid not in self.accounts:
             raise NotFoundError(f"Unknown account: {aid}", details={"account": aid})
         return self.accounts[aid]
+
+
+def infer_provider_id(
+    address: str = "",
+    imap_host: str = "",
+    explicit: str = "auto",
+    discovered_id: str | None = None,
+) -> str:
+    """Resolve auto/empty provider from discovery, well-known domains, or IMAP host."""
+    if explicit and explicit not in {"auto", ""}:
+        return explicit
+    if discovered_id and discovered_id not in {"auto", ""}:
+        return discovered_id
+    domain = ""
+    if address and "@" in address:
+        domain = address.rsplit("@", 1)[-1].lower().strip().rstrip(">")
+    from mailkit.discovery import WELL_KNOWN
+
+    if domain in WELL_KNOWN:
+        return WELL_KNOWN[domain].provider_id
+    host = (imap_host or "").lower()
+    if host == "imap.gmail.com" or host.endswith(".gmail.com"):
+        return "gmail"
+    if host.startswith("outlook.") or "office365" in host:
+        return "graph"
+    if "yahoo" in host:
+        return "yahoo"
+    return "imap"
 
 
 def _as_dataclass(cls, data: dict[str, Any]):
