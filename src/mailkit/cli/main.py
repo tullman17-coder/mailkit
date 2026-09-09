@@ -454,6 +454,8 @@ def _accounts(args, root, out, client: ApiClient) -> int:
                 secrets["client_secret"] = args.client_secret
             tokens = run_local_oauth(acc, secrets)
             runtime.vault.put_account(acc.id, {**secrets, **tokens})
+            if is_running(root):
+                client.request("POST", "/v1/accounts", body={**body, **tokens})
             out.data(_acc_row(acc), text=f"added {acc.id} ({acc.address}) via oauth2")
             return 0
         if is_running(root):
