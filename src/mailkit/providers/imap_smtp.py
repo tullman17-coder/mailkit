@@ -376,10 +376,12 @@ def _flag_token(flag: str) -> str:
 
 def _imap_criteria(query: dict[str, Any]) -> list[str]:
     crit: list[str] = []
-    if query.get("unread"):
-        crit.append("UNSEEN")
-    if query.get("flagged"):
-        crit.append("FLAGGED")
+    unread = query.get("unread")
+    if unread is not None:
+        crit.append("UNSEEN" if unread else "SEEN")
+    flagged = query.get("flagged")
+    if flagged is not None:
+        crit.append("FLAGGED" if flagged else "UNFLAGGED")
     if query.get("since"):
         crit.extend(["SINCE", _imap_date(query["since"])])
     if query.get("before"):
