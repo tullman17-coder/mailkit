@@ -35,7 +35,7 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 | GET/POST/DELETE | `/v1/webhooks` | HTTP callbacks |
 | GET/POST/DELETE | `/v1/rules` | classification / routing |
 | GET | `/v1/plugins` | loaded plugin ids |
-| POST | `/v1/provider-hooks/graph` | Graph validation + notifications |
+| POST | `/v1/provider-hooks/graph` | Graph validation + notifications (no auth; Microsoft cannot send the daemon bearer) |
 
 ## Real-time
 
