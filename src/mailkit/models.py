@@ -38,6 +38,36 @@ EVENT_TYPES = (
     "service.doctor",
 )
 
+# API flag/read mutations → event types. Keys must stay distinct from message.created.
+FLAG_MUTATION_EVENTS = {
+    "flag": "message.flagged",
+    "unflag": "message.unflagged",
+    "read": "message.read",
+    "unread": "message.unread",
+}
+
+
+def apply_flag_mutation(snapshot: dict, action: str) -> dict:
+    """Copy a message snapshot with flag/read state applied (in-memory only)."""
+    data = dict(snapshot)
+    flags = [str(f) for f in (data.get("flags") or [])]
+    if action == "flag":
+        if not any(f.lower() == "flagged" for f in flags):
+            flags.append("Flagged")
+        data["flagged"] = True
+    elif action == "unflag":
+        flags = [f for f in flags if f.lower() != "flagged"]
+        data["flagged"] = False
+    elif action == "read":
+        if not any(f.lower() == "seen" for f in flags):
+            flags.append("Seen")
+        data["unread"] = False
+    elif action == "unread":
+        flags = [f for f in flags if f.lower() != "seen"]
+        data["unread"] = True
+    data["flags"] = flags
+    return data
+
 MAILBOX_ROLES = ("inbox", "saved", "sent", "drafts", "archives", "trash", "junk", "custom")
 
 
