@@ -44,6 +44,7 @@ def _seed(tmp_path, *, flagged=False, unread=True, flags=None):
         unread=unread,
         flagged=flagged,
         flags=list(flags or []),
+        body_text="Hello body",
     )
     store.upsert_message(msg)
     provider = FakeProvider()
@@ -126,8 +127,13 @@ def test_get_message_returns_updated_flags_after_mutation(tmp_path):
     assert "Flagged" in got["data"]["flags"]
 
 
-def test_flag_mutation_does_not_emit_events(tmp_path):
+def test_flag_mutation_emits_events(tmp_path):
     store, _, app = _seed(tmp_path)
+    from mailkit.events import EventBus
+
+    app.bus = EventBus(store)
     _mutate_message(app, "msg_1", "flag", {}, {})
     _mutate_message(app, "msg_1", "read", {}, {})
-    assert store.events_after(None, limit=10) == []
+    types = [e["type"] for e in store.events_after(None, limit=10)]
+    assert "message.flagged" in types
+    assert "message.read" in types

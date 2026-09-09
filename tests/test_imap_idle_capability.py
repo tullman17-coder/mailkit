@@ -60,6 +60,8 @@ def _install_imap(monkeypatch, capability: str) -> list:
             created.append(self)
 
     monkeypatch.setattr("mailkit.providers.imap_smtp.imaplib.IMAP4_SSL", BoundIMAP)
+    monkeypatch.setattr("mailkit.providers.imap_smtp._AbortableIMAP4SSL", BoundIMAP)
+    monkeypatch.setattr("mailkit.providers.imap_smtp._AbortableIMAP4", BoundIMAP)
     return created
 
 

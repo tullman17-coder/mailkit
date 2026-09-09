@@ -398,7 +398,9 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
             remove = ["Seen"]
         provider.set_flags(mailbox, uid, add=add, remove=remove)
         if stored:
-            app.runtime.store.patch_message_flags(msg_id, add=add, remove=remove)
+            patch = getattr(app.runtime.store, "patch_message_flags", None)
+            if callable(patch):
+                patch(msg_id, add=add, remove=remove)
         event_type = FLAG_MUTATION_EVENTS[action]
         snapshot = apply_flag_mutation(
             stored
@@ -412,25 +414,27 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
             },
             action,
         )
-        app.bus.publish(
-            Event(
-                id=new_id("evt"),
-                ts=utcnow(),
-                account_id=acc.id,
-                provider_id=acc.provider,
-                mailbox=mailbox,
-                type=event_type,
-                thread_id=snapshot.get("thread_id") or "",
-                message=snapshot,
-                data={"action": action},
-                idempotency_key=idempotency_key(
-                    acc.id,
-                    mailbox,
-                    event_type,
-                    uid,
-                ),
+        bus = getattr(app, "bus", None)
+        if bus is not None:
+            bus.publish(
+                Event(
+                    id=new_id("evt"),
+                    ts=utcnow(),
+                    account_id=acc.id,
+                    provider_id=acc.provider,
+                    mailbox=mailbox,
+                    type=event_type,
+                    thread_id=snapshot.get("thread_id") or "",
+                    message=snapshot,
+                    data={"action": action},
+                    idempotency_key=idempotency_key(
+                        acc.id,
+                        mailbox,
+                        event_type,
+                        uid,
+                    ),
+                )
             )
-        )
         return ok({"id": msg_id, "action": action})
     if action == "tag":
         tags = body.get("tags") or body.get("tag") or []

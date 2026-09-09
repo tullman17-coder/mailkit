@@ -97,5 +97,5 @@ def test_desktop_reply_posts_v1_reply_and_archive_uses_role():
     assert "state.replyId" in src
     assert '{ mailbox: "archives" }' in src
     assert '{ mailbox: "Archive" }' not in src
-    assert "/flag" in src
+    assert "${action}" in src
     assert "unflag" in src

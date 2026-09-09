@@ -138,7 +138,6 @@ def test_folder_map_prefers_special_use_saved_over_heuristic_name():
 
 
 def test_leftover_starred_still_occupies_saved_section_when_alone():
-def test_leftover_starred_still_occupies_saved_section_when_alone():
     leftover = parse_list_line(r'(\HasNoChildren) "/" "Starred"')
     fmap = build_folder_map([Mailbox(name="INBOX", role="inbox"), leftover])
     assert fmap.by_role["saved"].name == "Starred"
