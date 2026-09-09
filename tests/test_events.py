@@ -3,7 +3,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from mailkit.api.routes import _events, _mutate_message
+from mailkit.api.routes import _events, _mutate_message, dispatch
 from mailkit.config import AccountConfig, AppConfig
 from mailkit.db import Store
 from mailkit.events import EventBus
@@ -35,6 +35,12 @@ def test_sse_query_cursor_wins_over_last_event_id():
     resp = _events(SimpleNamespace(bus=bus), "GET", ["stream"], qs, {}, handler)
     resp.stream(io.BytesIO())
     assert bus.cursor == "evt_query"
+
+
+def _publish(bus: EventBus, **kwargs) -> Event:
+    defaults = dict(id=new_id("evt"), account_id="work", provider_id="imap", type="message.created")
+    defaults.update(kwargs)
+    return bus.publish(Event(**defaults))
 
 
 def test_idempotent_publish_and_cursor(tmp_path: Path):
@@ -226,3 +232,50 @@ def test_flag_and_read_mutations_publish_events(tmp_path: Path):
     assert flagged_ev["idempotency_key"] != created_key
     assert read_ev["idempotency_key"] != created_key
     assert flagged_ev["idempotency_key"] != read_ev["idempotency_key"]
+
+
+def test_durable_ack_advances_subscription_cursor(tmp_path: Path):
+    store = Store(tmp_path)
+    bus = EventBus(store)
+    first = _publish(bus)
+    later = _publish(bus, type="message.flagged")
+    store.save_subscription("sub1", "invoices", EventFilter(account=["work"]), durable=True, ack_required=True, cursor=None)
+    store.ack("sub1", first.id, "pending")
+    assert store.get_subscription("sub1")["cursor"] is None
+    store.ack("sub1", first.id, "acked")
+    assert store.get_subscription("sub1")["cursor"] == first.id
+    store.ack("sub1", later.id, "acked")
+    assert store.get_subscription("sub1")["cursor"] == later.id
+    replayed = bus.replay(None, store.get_subscription("sub1")["cursor"], limit=10)
+    assert replayed == []
+
+
+def test_durable_ack_does_not_rewind_cursor(tmp_path: Path):
+    store = Store(tmp_path)
+    bus = EventBus(store)
+    older = _publish(bus)
+    newer = _publish(bus, type="message.flagged")
+    store.save_subscription("sub1", "invoices", EventFilter(account=["work"]), durable=True, ack_required=True, cursor=None)
+    store.ack("sub1", newer.id, "acked")
+    assert store.get_subscription("sub1")["cursor"] == newer.id
+    store.ack("sub1", older.id, "acked")
+    assert store.get_subscription("sub1")["cursor"] == newer.id
+
+
+def test_http_events_ack_advances_subscription_cursor(tmp_path: Path):
+    store = Store(tmp_path)
+    bus = EventBus(store)
+    ev = _publish(bus)
+    store.save_subscription("sub1", "invoices", EventFilter(account=["work"]), durable=True, ack_required=True, cursor=None)
+    app = SimpleNamespace(runtime=SimpleNamespace(store=store), bus=bus)
+    result = dispatch(
+        app,
+        "POST",
+        "/v1/events/ack",
+        {},
+        {"subscription_id": "sub1", "event_id": ev.id},
+        handler=None,
+    )
+    assert result["ok"] is True
+    assert result["data"]["acked"] == ev.id
+    assert store.get_subscription("sub1")["cursor"] == ev.id

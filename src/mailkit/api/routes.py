@@ -502,6 +502,7 @@ def _events(app: App, method: str, rest: list[str], qs: dict, body: dict, handle
         if not sub or not event_id:
             raise UsageError("subscription_id and event_id required")
         app.runtime.store.ack(sub, event_id, "acked")
+        app.runtime.store.advance_cursor(sub, event_id)
         return ok({"acked": event_id})
     if method == "GET" and not rest:
         filt = EventFilter.from_dict({k: v[0] if len(v) == 1 else v for k, v in qs.items() if k not in {"token", "cursor", "limit"}})

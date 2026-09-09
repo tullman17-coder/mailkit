@@ -404,6 +404,25 @@ class Store:
         self.conn.execute("UPDATE subscriptions SET cursor=? WHERE id=?", (cursor, sub_id))
         self.conn.commit()
 
+    def _event_rowid(self, event_id: str | None) -> int | None:
+        if not event_id:
+            return None
+        row = self.conn.execute("SELECT rowid FROM events WHERE id=?", (event_id,)).fetchone()
+        return int(row["rowid"]) if row else None
+
+    def advance_cursor(self, sub_id: str, event_id: str) -> None:
+        """Persist last_acked on the subscription when event_id is newer than the stored cursor."""
+        new_rowid = self._event_rowid(event_id)
+        if new_rowid is None:
+            return
+        sub = self.get_subscription(sub_id)
+        if not sub:
+            return
+        current_rowid = self._event_rowid(sub.get("cursor"))
+        if current_rowid is not None and new_rowid <= current_rowid:
+            return
+        self.set_cursor(sub_id, event_id)
+
     def ack(self, sub_id: str, event_id: str, status: str = "acked", error: str | None = None) -> None:
         self.conn.execute(
             """
@@ -418,6 +437,8 @@ class Store:
             (sub_id, event_id, status, 1 if status != "acked" else 0, error, utcnow()),
         )
         self.conn.commit()
+        if status == "acked":
+            self.advance_cursor(sub_id, event_id)
 
     def pending_acks(self, sub_id: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
