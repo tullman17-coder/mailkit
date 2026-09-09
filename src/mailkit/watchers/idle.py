@@ -12,6 +12,7 @@ from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
 from mailkit.providers.imap_smtp import ImapSmtpProvider
+from mailkit.watchers.flag_diff import refresh_known_flags, seed_flag_state, snapshot_of
 from mailkit.watchers.poll import emit_message_created, load_uid_cursor, save_uid_cursor
 
 log = get_logger("mailkit.idle")
@@ -100,6 +101,20 @@ class IdleWatcher:
 
     def _idle_loop(self, account, provider, client, mailbox, last_uid, emit, stop) -> int:
         # Slice IDLE into 60s windows so shutdown is prompt; IMAP servers cap IDLE near 29 minutes.
+        if not last_uid:
+            try:
+                known = provider.recent_uids(mailbox, None)
+                last_uid = max(known) if known else 0
+            except Exception:
+                last_uid = 0
+        flag_state: dict[int, tuple[bool, bool]] = {}
+        seed_flag_state(getattr(provider, "store", None), account.id, mailbox, flag_state)
+        if last_uid and last_uid not in flag_state:
+            try:
+                seeded = provider.get_message(mailbox, str(last_uid), peek=True)
+                flag_state[int(last_uid)] = snapshot_of(seeded)
+            except Exception:
+                pass
         while not stop.is_set():
             notified = _wait_idle(client, 60.0, stop)
             if stop.is_set():
@@ -113,9 +128,13 @@ class IdleWatcher:
                 if uid <= last_uid:
                     continue
                 last_uid = max(last_uid, uid)
-                emit_message_created(account, provider, mailbox, uid, emit)
+                msg = emit_message_created(account, provider, mailbox, uid, emit)
+                if msg is not None:
+                    flag_state[int(uid)] = snapshot_of(msg)
             save_uid_cursor(provider, account.id, mailbox, last_uid)
-            if not notified:
+            if notified:
+                refresh_known_flags(account, provider, mailbox, flag_state, emit)
+            else:
                 try:
                     client.noop()
                 except Exception:
