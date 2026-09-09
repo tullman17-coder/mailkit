@@ -86,6 +86,49 @@ def role_from_name(name: str) -> str:
     return "custom"
 
 
+def _attr_set(box: Mailbox) -> set[str]:
+    attrs = list(box.special_use or []) + list(box.flags or [])
+    return {normalize_attr(a) for a in attrs}
+
+
+def has_special_use_for_role(box: Mailbox, role: str) -> bool:
+    lowered = _attr_set(box)
+    if role == "inbox" and (box.name.upper() == "INBOX" or "\\inbox" in lowered):
+        return True
+    return any(SPECIAL_USE.get(attr) == role for attr in lowered)
+
+
+def is_virtual_flagged_mailbox(box: Mailbox | None) -> bool:
+    """True only for IMAP SPECIAL-USE \\Flagged / \\Starred virtual views.
+
+    A leftover empty "Starred" folder that matched by name is not sufficient.
+    """
+    if box is None:
+        return False
+    return bool(_attr_set(box) & {"\\flagged", "\\starred"})
+
+
+def resolve_saved_view(boxes: list[Mailbox]) -> tuple[str, bool]:
+    """Return (folder, apply_flagged_filter) for the Saved section.
+
+    Always apply a flagged-message view unless a known virtual \\Flagged
+    special-use mailbox exists. Heuristic names such as Starred/Flagged
+    do not skip the \\Flagged search.
+    """
+    virtual = next((b for b in boxes if b and is_virtual_flagged_mailbox(b)), None)
+    if virtual:
+        return virtual.name, False
+    inbox = next(
+        (
+            b
+            for b in boxes
+            if b and (getattr(b, "role", "") == "inbox" or (b.name or "").upper() == "INBOX")
+        ),
+        None,
+    )
+    return (inbox.name if inbox else "INBOX"), True
+
+
 def parse_list_line(line: str | bytes) -> Mailbox | None:
     if isinstance(line, bytes):
         line = line.decode("utf-8", "replace")
@@ -142,7 +185,14 @@ def build_folder_map(listed: list[Mailbox], overrides: dict[str, str] | None = N
             box.role = role
             by_role[role] = box
     for mailbox in listed:
-        if mailbox.role != "custom" and mailbox.role not in by_role:
+        if mailbox.role == "custom":
+            continue
+        current = by_role.get(mailbox.role)
+        if current is None:
+            by_role[mailbox.role] = mailbox
+        elif not has_special_use_for_role(current, mailbox.role) and has_special_use_for_role(
+            mailbox, mailbox.role
+        ):
             by_role[mailbox.role] = mailbox
     if "inbox" not in by_role:
         for mailbox in listed:
