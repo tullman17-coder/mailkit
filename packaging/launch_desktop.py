@@ -9,11 +9,11 @@ from mailkit.service import frozen_dispatch_argv, spawn_generation
 
 
 if __name__ == "__main__":
-    rest = frozen_dispatch_argv(
-        sys.argv[1:],
-        os.environ.get("MAILKIT_ROLE"),
-        spawn_generation(),
-    )
+    role = os.environ.get("MAILKIT_ROLE")
+    gen = spawn_generation()
+    rest = frozen_dispatch_argv(sys.argv[1:], role, gen)
+    # Nested frozen children never open a window. Dispatch maps desktop/junk
+    # argv onto ``service run``; this path is UI-only for the root process.
     if rest is not None:
         from mailkit.cli.main import main
 
