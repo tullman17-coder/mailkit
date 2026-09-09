@@ -11,7 +11,7 @@ from mailkit.api.http import App, Response, json_response
 from mailkit.compose import build_message, reply_subject
 from dataclasses import fields
 
-from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, save_config
+from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, infer_provider_id, save_config
 from mailkit.discovery import discover
 from mailkit.errors import NotFoundError, UsageError
 from mailkit.ids import new_id
@@ -175,7 +175,14 @@ def _account_from_body(body: dict) -> AccountConfig:
         graph_notify_url=oauth_body.get("graph_notify_url") or "",
     )
     folders = FolderSettings(**(body.get("folders") or {}))
-    provider = body.get("provider") or (discovered.provider_id if discovered else "imap")
+    requested = body.get("provider") or ""
+    discovered_id = discovered.provider_id if discovered else None
+    provider = infer_provider_id(
+        address,
+        imap.host,
+        explicit=requested,
+        discovered_id=discovered_id,
+    )
     auth = body.get("auth") or (discovered.auth_hint if discovered else "password")
     return AccountConfig(
         id=acc_id,
