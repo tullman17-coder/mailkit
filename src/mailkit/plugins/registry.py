@@ -87,10 +87,12 @@ def load_plugins(root: Path | None = None, extra: Iterable[ModuleType] | None = 
     from mailkit.providers.gmail import GmailPlugin
     from mailkit.providers.graph import GraphPlugin
     from mailkit.providers.imap_smtp import ImapSmtpPlugin
+    from mailkit.providers.local import LocalPlugin
     from mailkit.providers.yahoo import YahooPlugin
     from mailkit.watchers.gmail_push import GmailPushWatcher
     from mailkit.watchers.graph_push import GraphPushWatcher
     from mailkit.watchers.idle import IdleWatcher
+    from mailkit.watchers.local import LocalWatcher
     from mailkit.watchers.poll import PollWatcher
 
     for plugin in (
@@ -98,8 +100,10 @@ def load_plugins(root: Path | None = None, extra: Iterable[ModuleType] | None = 
         GraphPlugin(),
         YahooPlugin(),
         ImapSmtpPlugin(),
+        LocalPlugin(),
         PasswordAuth(),
         XOAuth2Auth(),
+        LocalWatcher(),
         IdleWatcher(),
         PollWatcher(),
         GmailPushWatcher(),

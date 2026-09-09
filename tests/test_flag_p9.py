@@ -97,4 +97,5 @@ def test_desktop_reply_posts_v1_reply_and_archive_uses_role():
     assert "state.replyId" in src
     assert '{ mailbox: "archives" }' in src
     assert '{ mailbox: "Archive" }' not in src
-    assert 'api("POST", `/v1/messages/${state.current.id}/flag`' in src
+    assert "/flag" in src
+    assert "unflag" in src

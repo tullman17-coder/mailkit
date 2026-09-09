@@ -33,8 +33,8 @@ def choose_watcher(account: AccountConfig, provider: Any, plugins) -> Any:
         watcher = plugins.watcher_for(requested)
         if watcher and watcher.supports(account, provider):
             return watcher
-    # Preference order: native push, IDLE, poll.
-    for name in ("gmail_push", "graph_push", "idle", "poll"):
+    # Preference order: local demo, native push, IDLE, poll.
+    for name in ("local", "gmail_push", "graph_push", "idle", "poll"):
         if requested == "auto" or requested == name:
             watcher = plugins.watcher_for(name)
             if not watcher:

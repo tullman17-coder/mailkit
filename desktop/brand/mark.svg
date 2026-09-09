@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Mailkit">
+  <rect width="64" height="64" rx="14" fill="#4A1520"/>
+  <path d="M12 22h40v24H12z" fill="#F4E4C1"/>
+  <path d="M12 22l20 14 20-14" fill="none" stroke="#7A2A38" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M18 40c2-8 6-12 10-10 1 4-2 9-7 12zm18-10c4-2 8 2 10 10-5-3-8-8-7-12z" fill="#7A2A38"/>
+</svg>

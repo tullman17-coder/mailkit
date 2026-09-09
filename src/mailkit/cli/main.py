@@ -24,6 +24,7 @@ from mailkit.service import is_running, read_pid, spawn_background, stop_daemon
 EPILOG = """
 examples:
   mailkit service start
+  mailkit demo
   mailkit accounts add --address you@gmail.com --auth oauth2
   mailkit accounts add --address you@custom.com --imap-host imap.example.com --smtp-host smtp.example.com
   mailkit messages list --account work --mailbox inbox --unread
@@ -190,6 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
     schema.add_argument("name", nargs="?", default="event", help="event|message|account|subscription|error")
 
     desk = sub.add_parser("desktop", help="open the local Mailkit window (starts the engine if needed)")
+    demo = sub.add_parser("demo", help="seed a local mailbox and serve the desktop UI without IMAP")
+    demo.add_argument("--run", action="store_true", help="run the engine in the foreground after seeding")
     desk.set_defaults(desk_cmd="open")
 
     doc = sub.add_parser("doctor", help="diagnose and safely repair the local engine")
@@ -298,6 +301,8 @@ def _dispatch(args, root: Path, out: Printer) -> int:
         from mailkit.desktop import run_desktop
 
         return run_desktop(root)
+    if args.cmd == "demo":
+        return _demo(args, root, out)
     if args.cmd == "doctor":
         return _doctor(args, root, out)
     if args.cmd == "plugins":
@@ -377,6 +382,32 @@ def _service(args, root, out, client: ApiClient) -> int:
         sys.stdout.write(unit_text(target, root))
         return 0
     return ExitCode.USAGE
+
+
+def _demo(args, root: Path, out: Printer) -> int:
+    from mailkit.demo import seed_demo
+    from mailkit.service import load_or_create_token
+
+    acc = seed_demo(root)
+    cfg = load_config(root)
+    token = load_or_create_token(root)
+    origin = f"http://{cfg.daemon.host}:{cfg.daemon.port}"
+    url = f"{origin}/?token={token}"
+    payload = {"account": acc.id, "url": url, "token": token}
+    if getattr(args, "run", False):
+        out.data(payload, text=f"demo mailbox {acc.id}\n{url}")
+        from mailkit.daemon import run
+
+        return run(root, foreground=True)
+    if not is_running(root):
+        pid = spawn_background(root)
+        payload["pid"] = pid
+        payload["status"] = "started"
+    else:
+        payload["pid"] = read_pid(root)
+        payload["status"] = "running"
+    out.data(payload, text=f"demo mailbox {acc.id} — open {url}")
+    return 0
 
 
 def _accounts(args, root, out, client: ApiClient) -> int:

@@ -8,8 +8,8 @@
   ];
 
   const state = {
-    token: "",
-    base: "http://127.0.0.1:8765",
+    token: tokenFromLocation(),
+    base: apiBase(),
     accounts: [],
     account: null,
     mailbox: "inbox",
@@ -21,6 +21,24 @@
   };
 
   const $ = (id) => document.getElementById(id);
+  function tokenFromLocation() {
+    try {
+      const search = typeof location !== "undefined" ? location.search || "" : "";
+      return new URLSearchParams(search).get("token") || "";
+    } catch {
+      return "";
+    }
+  }
+  function apiBase() {
+    try {
+      if (typeof location !== "undefined" && /^https?:$/.test(location.protocol)) {
+        return location.origin;
+      }
+    } catch {
+      /* file:// desktop shell */
+    }
+    return "http://127.0.0.1:8765";
+  }
   const toast = (msg) => {
     const el = $("toast");
     el.textContent = msg;
@@ -210,10 +228,14 @@
   function closeCompose() {
     state.replyId = null;
     $("compose").classList.remove("open");
+    const title = $("compose-title");
+    if (title) title.textContent = "Send";
   }
 
   $("compose-btn").addEventListener("click", () => {
     state.replyId = null;
+    const title = $("compose-title");
+    if (title) title.textContent = "Send";
     $("compose").classList.add("open");
   });
   $("compose-cancel").addEventListener("click", closeCompose);
@@ -249,7 +271,8 @@
   $("doctor-btn").addEventListener("click", async () => {
     try {
       const report = await api("POST", "/v1/doctor/repair");
-      toast(report.ok ? "Doctor: clear" : `${report.failed} issue(s) remain`);
+      const failed = (report && report.failed) || 0;
+      toast(report && report.ok !== false && failed === 0 ? "Doctor: clear" : `${failed} issue(s) remain`);
     } catch (err) {
       toast(err.message);
     }
@@ -272,7 +295,9 @@
     try {
       await api("POST", `/v1/messages/${state.current.id}/move`, { mailbox: "archives" });
       toast("Moved to Archive.");
+      state.current = null;
       await loadMessages();
+      renderRead();
     } catch (err) {
       toast(err.message);
     }
@@ -281,6 +306,8 @@
     if (!state.current) return;
     state.replyId = state.current.id;
     $("compose").classList.add("open");
+    const title = $("compose-title");
+    if (title) title.textContent = "Reply";
     $("subject").value = (state.current.subject || "").startsWith("Re:")
       ? state.current.subject
       : `Re: ${state.current.subject || ""}`;

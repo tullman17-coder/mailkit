@@ -340,6 +340,8 @@ def check_endpoints(ctx: DoctorContext) -> Finding:
     for acc in cfg.accounts.values():
         if not acc.enabled:
             continue
+        if acc.provider == "local":
+            continue
         if acc.imap.host:
             continue
         missing.append(acc.id)

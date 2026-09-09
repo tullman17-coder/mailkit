@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import socket
 import ssl
 import threading
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from mailkit.events import EventBus
 from mailkit.logutil import get_logger
@@ -24,6 +24,8 @@ from mailkit.watchers.graph_push import GRAPH_HOOK_PATH
 log = get_logger("mailkit.api")
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+UI_ROOT_PATHS = {"/", "/index.html", "/favicon.ico"}
+UI_PREFIXES = ("/css/", "/js/", "/brand/")
 
 # Desktop loads index.html as a file:// URI and fetches this API with
 # Authorization. Browsers require these headers on the actual GET/POST/SSE
@@ -104,6 +106,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _dispatch(self) -> None:
         parsed = urlparse(self.path)
+        if self.command == "GET" and _is_desktop_path(parsed.path):
+            resp = _desktop_file_response(parsed.path)
+            self._write(resp)
+            return
         if parsed.path in {"/v1/events/ws", "/v1/ws"}:
             if not self._check_auth() and parse_qs(parsed.query).get("token", [""])[0] != self.app.token:
                 self._unauthorized()
@@ -262,13 +268,48 @@ def _ws_recv(sock: socket.socket) -> str | None:
     return data.decode("utf-8", "replace")
 
 
+def _is_desktop_path(path: str) -> bool:
+    if path in UI_ROOT_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in UI_PREFIXES)
+
+
+def _desktop_file_response(url_path: str) -> Response:
+    from mailkit.desktop import desktop_dir
+
+    relative = "index.html" if url_path in {"/", "/index.html"} else unquote(url_path).lstrip("/")
+    if url_path == "/favicon.ico":
+        relative = "brand/mark.svg"
+    root = desktop_dir().resolve()
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return Response(status=404, body=b"not found", headers={"Content-Type": "text/plain"})
+    if not target.is_file():
+        return Response(status=404, body=b"not found", headers={"Content-Type": "text/plain"})
+    data = target.read_bytes()
+    mime, _ = mimetypes.guess_type(str(target))
+    if target.suffix == ".js":
+        mime = "application/javascript"
+    return Response(
+        status=200,
+        body=data,
+        headers={
+            "Content-Type": mime or "application/octet-stream",
+            "Content-Length": str(len(data)),
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 def serve_forever(app: App, host: str, port: int, *, stop: threading.Event | None = None) -> ThreadingHTTPServer:
     Handler.app = app
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, name="mailkit-http", daemon=True)
     thread.start()
-    log.info("API listening on http://%s:%s/v1", host, port)
+    log.info("API listening on http://%s:%s/v1 (desktop UI at /)", host, port)
     if stop:
         def _watch():
             stop.wait()
