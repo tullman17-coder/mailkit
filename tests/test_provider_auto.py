@@ -128,27 +128,23 @@ def _add_account(tmp_path, address, extra=None):
     return load_config(tmp_path).accounts["acct"]
 
 
-def test_cli_add_auto_persists_gmail(tmp_path, monkeypatch):
-    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: False)
+def test_cli_add_auto_persists_gmail(tmp_path):
     acc = _add_account(tmp_path, "you@gmail.com")
     assert acc.provider == "gmail"
     assert acc.imap.host == "imap.gmail.com"
 
 
-def test_cli_add_auto_persists_graph(tmp_path, monkeypatch):
-    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: False)
+def test_cli_add_auto_persists_graph(tmp_path):
     acc = _add_account(tmp_path, "you@outlook.com")
     assert acc.provider == "graph"
 
 
-def test_cli_add_auto_persists_yahoo(tmp_path, monkeypatch):
-    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: False)
+def test_cli_add_auto_persists_yahoo(tmp_path):
     acc = _add_account(tmp_path, "me@yahoo.com")
     assert acc.provider == "yahoo"
 
 
-def test_cli_add_auto_persists_imap_for_custom(tmp_path, monkeypatch):
-    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: False)
+def test_cli_add_auto_persists_imap_for_custom(tmp_path):
     acc = _add_account(
         tmp_path,
         "me@example.com",
@@ -157,8 +153,7 @@ def test_cli_add_auto_persists_imap_for_custom(tmp_path, monkeypatch):
     assert acc.provider == "imap"
 
 
-def test_cli_explicit_provider_not_overridden(tmp_path, monkeypatch):
-    monkeypatch.setattr("mailkit.cli.main.is_running", lambda root: False)
+def test_cli_explicit_provider_not_overridden(tmp_path):
     acc = _add_account(tmp_path, "you@gmail.com", extra=["--provider", "imap"])
     assert acc.provider == "imap"
 
