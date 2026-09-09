@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterator
 
-from mailkit.models import Event, EventFilter, Message, utcnow
+from mailkit.models import Event, EventFilter, Message, apply_system_flags, utcnow
 from mailkit.paths import db_path
 
 SCHEMA = """
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS messages (
   unread INTEGER,
   flagged INTEGER,
   draft INTEGER,
+  answered INTEGER,
   has_attachments INTEGER,
   attachment_types_json TEXT,
   snippet TEXT,
@@ -112,6 +113,13 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "answered" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN answered INTEGER")
+        conn.commit()
+
+
 def connect(root: Path | None = None) -> sqlite3.Connection:
     path = db_path(root)
     conn = sqlite3.connect(path, check_same_thread=False)
@@ -119,6 +127,7 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     return conn
 
 
@@ -137,13 +146,14 @@ class Store:
             INSERT INTO messages (
               id, account_id, provider_id, mailbox, uid, uidvalidity, native_id,
               message_id, thread_id, date, subject, from_json, to_json, cc_json,
-              flags_json, labels_json, tags_json, unread, flagged, draft,
+              flags_json, labels_json, tags_json, unread, flagged, draft, answered,
               has_attachments, attachment_types_json, snippet, size, payload_json, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               mailbox=excluded.mailbox, uid=excluded.uid, flags_json=excluded.flags_json,
               labels_json=excluded.labels_json, tags_json=excluded.tags_json,
               unread=excluded.unread, flagged=excluded.flagged, draft=excluded.draft,
+              answered=excluded.answered,
               snippet=excluded.snippet, payload_json=excluded.payload_json, updated_at=excluded.updated_at
             """,
             (
@@ -167,6 +177,7 @@ class Store:
                 int(message.unread),
                 int(message.flagged),
                 int(message.draft),
+                int(message.answered),
                 int(message.has_attachments),
                 json.dumps(message.attachment_types),
                 message.snippet,
@@ -201,6 +212,37 @@ class Store:
         )
         self.conn.commit()
         return row
+
+    def patch_message_flags(
+        self,
+        message_id: str,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict | None:
+        """Patch cached flags including answered after a successful IMAP STORE."""
+        row = self.get_message(message_id)
+        if not row:
+            return None
+        updated = apply_system_flags(row, add=add, remove=remove)
+        self.conn.execute(
+            """
+            UPDATE messages SET flagged=?, unread=?, draft=?, answered=?, flags_json=?, payload_json=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                int(bool(updated.get("flagged"))),
+                int(bool(updated.get("unread"))),
+                int(bool(updated.get("draft"))),
+                int(bool(updated.get("answered"))),
+                json.dumps(updated["flags"]),
+                json.dumps(updated),
+                utcnow(),
+                message_id,
+            ),
+        )
+        self.conn.commit()
+        return updated
 
     def list_messages(
         self,
