@@ -550,6 +550,17 @@ def repair_daemon(ctx: DoctorContext, finding: Finding) -> str:
     return f"spawned pid {pid} (health not confirmed yet)"
 
 
+def _watcher_running(worker: Any) -> bool:
+    """A connecting thread is live even when status is still "stopped"."""
+    if worker is None:
+        return False
+    thread = getattr(worker, "thread", None)
+    if thread is not None and thread.is_alive():
+        return True
+    alive = getattr(worker, "alive", None)
+    return bool(alive()) if callable(alive) else False
+
+
 def check_workers(ctx: DoctorContext) -> Finding:
     if ctx.app is None:
         return Finding("workers", "Account watchers", "ok", "skip", "worker check needs the running daemon")
@@ -560,8 +571,9 @@ def check_workers(ctx: DoctorContext) -> Finding:
         if not acc.enabled:
             continue
         worker = supervisor.workers.get(acc.id)
-        if worker is None or not worker.alive():
-            dead.append(acc.id)
+        if _watcher_running(worker):
+            continue
+        dead.append(acc.id)
     if dead:
         return Finding(
             "workers",

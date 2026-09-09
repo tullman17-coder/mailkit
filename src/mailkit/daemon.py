@@ -39,6 +39,7 @@ def run(root=None, *, foreground: bool = True) -> int:
 
     def handle_stop(*_args):
         stop.set()
+        supervisor.request_stop()
 
     signal.signal(signal.SIGINT, handle_stop)
     signal.signal(signal.SIGTERM, handle_stop)
