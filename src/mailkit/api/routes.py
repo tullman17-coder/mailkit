@@ -65,11 +65,13 @@ def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) ->
     if rest[:1] == ["discover"] and method in {"GET", "POST"}:
         address = body.get("address") or (qs.get("address") or [""])[0]
         return ok(discover(address).to_dict())
-    if rest == ["provider-hooks", "graph"] and method == "POST":
-        # Graph validationToken handshake + notifications.
+    if rest == ["provider-hooks", "graph"] and method in {"GET", "POST"}:
+        # Graph POSTs (sometimes GET) validationToken with no bearer, then notifications.
         token = (qs.get("validationToken") or [None])[0]
         if token:
-            return Response(status=200, body=token.encode(), headers={"Content-Type": "text/plain"})
+            return Response(status=200, body=token.encode("utf-8"), headers={"Content-Type": "text/plain"})
+        if method != "POST":
+            raise UsageError("Graph handshake requires validationToken")
         for note in body.get("value") or []:
             app.bus.publish(
                 __import__("mailkit.models", fromlist=["Event"]).Event(

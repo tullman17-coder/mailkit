@@ -15,6 +15,9 @@ from mailkit.providers.graph import GraphProvider
 
 log = get_logger("mailkit.graph_push")
 
+# Public API path Microsoft Graph POSTs to. Handler._dispatch must not require Bearer.
+GRAPH_HOOK_PATH = "/v1/provider-hooks/graph"
+
 
 class GraphPushWatcher:
     plugin_type = "watcher"
@@ -32,6 +35,8 @@ class GraphPushWatcher:
         if account.oauth.graph_notify_url:
             try:
                 exp = (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()
+                # graph_notify_url should be a public URL that reaches GRAPH_HOOK_PATH
+                # without Authorization; Graph's validation handshake cannot send our token.
                 graph_sub = provider.subscribe(account.oauth.graph_notify_url, expiration=exp)
                 if store and graph_sub and graph_sub.get("id"):
                     store.set_sync_cursor(account.id, mailbox, "graph_sub", graph_sub["id"])

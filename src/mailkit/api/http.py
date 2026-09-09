@@ -19,6 +19,7 @@ from mailkit.models import EventFilter, fail, ok
 from mailkit.runtime import Runtime
 from mailkit.supervisor import Supervisor
 from mailkit.webhooks import WebhookDispatcher
+from mailkit.watchers.graph_push import GRAPH_HOOK_PATH
 
 log = get_logger("mailkit.api")
 
@@ -109,7 +110,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._websocket(parsed)
             return
-        if not self._check_auth() and parsed.path not in {"/v1/health"}:
+        # Graph cannot attach the daemon bearer for subscription validation or
+        # change notifications, so the hook must stay reachable unauthenticated.
+        if not self._check_auth() and parsed.path not in {"/v1/health", GRAPH_HOOK_PATH}:
             self._unauthorized()
             return
         length = int(self.headers.get("Content-Length") or 0)
