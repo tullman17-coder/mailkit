@@ -1,9 +1,38 @@
+import io
 from pathlib import Path
+from types import SimpleNamespace
 
+from mailkit.api.routes import _events
 from mailkit.db import Store
 from mailkit.events import EventBus
 from mailkit.ids import idempotency_key, new_id
 from mailkit.models import Event, EventFilter
+
+
+class _CaptureBus:
+    def __init__(self):
+        self.cursor = object()
+
+    def stream(self, filt, cursor, stop):
+        self.cursor = cursor
+        return iter(())
+
+
+def test_sse_honors_last_event_id_when_query_cursor_absent():
+    bus = _CaptureBus()
+    handler = SimpleNamespace(headers={"Last-Event-ID": "evt_last"})
+    resp = _events(SimpleNamespace(bus=bus), "GET", ["stream"], {}, {}, handler)
+    resp.stream(io.BytesIO())
+    assert bus.cursor == "evt_last"
+
+
+def test_sse_query_cursor_wins_over_last_event_id():
+    bus = _CaptureBus()
+    handler = SimpleNamespace(headers={"Last-Event-ID": "evt_header"})
+    qs = {"cursor": ["evt_query"]}
+    resp = _events(SimpleNamespace(bus=bus), "GET", ["stream"], qs, {}, handler)
+    resp.stream(io.BytesIO())
+    assert bus.cursor == "evt_query"
 
 
 def test_idempotent_publish_and_cursor(tmp_path: Path):

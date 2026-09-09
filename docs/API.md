@@ -39,7 +39,7 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 
 ## Real-time
 
-- **SSE** `GET /v1/events/stream?...filters`: `id`, `event`, `data` fields. Last-Event-ID is the event id cursor.
+- **SSE** `GET /v1/events/stream?...filters`: `id`, `event`, `data` fields. Last-Event-ID is the event id cursor when the `cursor` query is omitted.
 - **WebSocket** `GET /v1/events/ws?token=`: text frames of `mailkit.event.v1`. Client may send `{"op":"subscribe","filter":{...}}`, `{"op":"ack","subscription_id":"...","event_id":"..."}`, `{"op":"ping"}`.
 - **Unix socket** `~/.mailkit/events.sock`: newline-delimited JSON events for local agents.
 - **CLI** `mailkit events stream` / `mailkit watch`: NDJSON on stdout.
