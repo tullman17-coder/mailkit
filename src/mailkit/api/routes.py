@@ -354,6 +354,8 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
         else:
             remove = ["Seen"]
         provider.set_flags(mailbox, str(native), add=add, remove=remove)
+        if stored:
+            app.runtime.store.patch_message_flags(msg_id, add=add, remove=remove)
         return ok({"id": msg_id, "action": action})
     if action == "tag":
         tags = body.get("tags") or body.get("tag") or []
