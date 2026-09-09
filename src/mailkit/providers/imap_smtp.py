@@ -411,14 +411,19 @@ class ImapSmtpProvider(BaseProvider):
             pass
 
     def set_flags(self, mailbox: str, native_id: str, add=None, remove=None) -> None:
+        uid = _require_uid(native_id)
         self._select(mailbox, readonly=False)
         client = self._client()
         if add:
             flags = " ".join(_flag_token(f) for f in add)
-            client.uid("STORE", str(native_id), "+FLAGS.SILENT", f"({flags})")
+            typ, _ = client.uid("STORE", uid, "+FLAGS.SILENT", f"({flags})")
+            if typ != "OK":
+                raise NetworkError(f"IMAP STORE failed for UID {uid}")
         if remove:
             flags = " ".join(_flag_token(f) for f in remove)
-            client.uid("STORE", str(native_id), "-FLAGS.SILENT", f"({flags})")
+            typ, _ = client.uid("STORE", uid, "-FLAGS.SILENT", f"({flags})")
+            if typ != "OK":
+                raise NetworkError(f"IMAP STORE failed for UID {uid}")
 
     def uidvalidity(self, mailbox: str) -> int:
         return self._uidvalidity.get(mailbox) or self._select(mailbox, readonly=True)
@@ -537,6 +542,15 @@ def _capability_tokens(client) -> set[str]:
         for item in data:
             _add(item)
     return tokens
+
+
+def _require_uid(native_id) -> str:
+    if native_id is None:
+        raise NotFoundError("Message has no IMAP UID")
+    uid = str(native_id).strip()
+    if not uid or uid.lower() in {"none", "null"}:
+        raise NotFoundError("Message has no IMAP UID")
+    return uid
 
 
 def _flag_token(flag: str) -> str:
