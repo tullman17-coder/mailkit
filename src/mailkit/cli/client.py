@@ -9,8 +9,21 @@ import urllib.request
 from typing import Any, Iterator
 
 from mailkit.config import AppConfig
-from mailkit.errors import AuthError, DaemonError, MailkitError, NetworkError
+from mailkit.errors import DaemonError, from_api_error
 from mailkit.service import is_running, load_or_create_token
+
+
+def _http_error(exc: urllib.error.HTTPError):
+    payload = exc.read().decode("utf-8", "replace")
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError:
+        parsed = {"error": {"message": payload, "code": "error"}}
+    err = (parsed or {}).get("error") or {"message": payload}
+    if not isinstance(err, dict):
+        err = {"message": str(err)}
+    message = err.get("message") or payload or f"HTTP {exc.code}"
+    return from_api_error(message, code=err.get("code"), details=err, status=exc.code)
 
 
 class ApiClient:
@@ -40,13 +53,7 @@ class ApiClient:
                     return None
                 return json.loads(raw.decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            payload = exc.read().decode("utf-8", "replace")
-            try:
-                parsed = json.loads(payload)
-            except json.JSONDecodeError:
-                parsed = {"error": {"message": payload, "code": "error"}}
-            err = (parsed or {}).get("error") or {"message": payload}
-            raise MailkitError(err.get("message") or payload, details=err) from exc
+            raise _http_error(exc) from exc
         except urllib.error.URLError as exc:
             raise DaemonError(f"Cannot reach mailkit service at {self.base}: {exc}") from exc
 
@@ -59,6 +66,8 @@ class ApiClient:
         req.add_header("Accept", "text/event-stream")
         try:
             resp = urllib.request.urlopen(req, timeout=None)
+        except urllib.error.HTTPError as exc:
+            raise _http_error(exc) from exc
         except urllib.error.URLError as exc:
             raise DaemonError(f"Cannot stream from {self.base}: {exc}") from exc
         buf = ""

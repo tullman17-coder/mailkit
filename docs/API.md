@@ -60,3 +60,5 @@ Filter query params (also subscription `filter` objects): `account`, `mailbox`, 
 | 6 | daemon not running |
 | 7 | conflict |
 | 8 | rate limit |
+
+The CLI maps a live daemon's `error.code` onto these values (`not_found` → 3, `auth` → 4, `network` → 5, `daemon` → 6, `conflict` → 7, `rate_limit` → 8). When `error.code` is missing or generic, HTTP status is used: 401/403 → 4, 404 → 3, 409 → 7, 429 → 8, 5xx → 6. A local "service is not running" check still exits 6 without an HTTP round-trip.
