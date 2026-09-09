@@ -12,6 +12,7 @@ from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
 from mailkit.providers.imap_smtp import ImapSmtpProvider
+from mailkit.watchers.flag_diff import refresh_known_flags, seed_flag_state, snapshot_of
 
 log = get_logger("mailkit.idle")
 
@@ -84,6 +85,14 @@ class IdleWatcher:
                 last_uid = max(known) if known else 0
             except Exception:
                 last_uid = 0
+        flag_state: dict[int, tuple[bool, bool]] = {}
+        seed_flag_state(getattr(provider, "store", None), account.id, mailbox, flag_state)
+        if last_uid and last_uid not in flag_state:
+            try:
+                seeded = provider.get_message(mailbox, str(last_uid), peek=True)
+                flag_state[int(last_uid)] = snapshot_of(seeded)
+            except Exception:
+                pass
         while not stop.is_set():
             notified = _wait_idle(client, 60.0, stop)
             if stop.is_set():
@@ -118,6 +127,9 @@ class IdleWatcher:
                         idempotency_key=idempotency_key(account.id, mailbox, "message.created", str(uid)),
                     )
                 )
+                flag_state[int(uid)] = snapshot_of(msg)
+            if notified:
+                refresh_known_flags(account, provider, mailbox, flag_state, emit)
             if not notified:
                 try:
                     client.noop()
