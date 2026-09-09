@@ -112,6 +112,13 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _canonical_flag(flag: str) -> str:
+    token = str(flag).lstrip("\\")
+    known = {"Seen", "Flagged", "Deleted", "Draft", "Answered", "Recent"}
+    capped = token.capitalize()
+    return capped if capped in known else token
+
+
 def connect(root: Path | None = None) -> sqlite3.Connection:
     path = db_path(root)
     conn = sqlite3.connect(path, check_same_thread=False)
@@ -198,6 +205,36 @@ class Store:
         self.conn.execute(
             "UPDATE messages SET tags_json=?, payload_json=?, updated_at=? WHERE id=?",
             (json.dumps(unique), json.dumps(row), utcnow(), message_id),
+        )
+        self.conn.commit()
+        return row
+
+    def patch_message_flags(
+        self,
+        message_id: str,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict | None:
+        """Patch cached flags/unread/flagged after a successful IMAP STORE."""
+        row = self.get_message(message_id)
+        if not row:
+            return None
+        flags = [_canonical_flag(f) for f in (row.get("flags") or [])]
+        drop = {_canonical_flag(f) for f in (remove or [])}
+        flags = [f for f in flags if f not in drop]
+        for token in (_canonical_flag(f) for f in (add or [])):
+            if token and token not in flags:
+                flags.append(token)
+        flag_set = {f.lower() for f in flags}
+        flagged = "flagged" in flag_set
+        unread = "seen" not in flag_set
+        row["flags"] = flags
+        row["flagged"] = flagged
+        row["unread"] = unread
+        self.conn.execute(
+            "UPDATE messages SET flagged=?, unread=?, flags_json=?, payload_json=?, updated_at=? WHERE id=?",
+            (int(flagged), int(unread), json.dumps(flags), json.dumps(row), utcnow(), message_id),
         )
         self.conn.commit()
         return row
