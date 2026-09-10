@@ -1,0 +1,43 @@
+{
+  "$id": "mailkit.pair.v1",
+  "type": "object",
+  "required": ["schema", "url", "token", "deeplink"],
+  "properties": {
+    "schema": {
+      "const": "mailkit.pair.v1"
+    },
+    "url": {
+      "type": "string"
+    },
+    "loopback_url": {
+      "type": "string"
+    },
+    "urls": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "token": {
+      "type": "string"
+    },
+    "deeplink": {
+      "type": "string"
+    },
+    "allow_remote": {
+      "type": "boolean"
+    },
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "shell": {
+      "type": "string"
+    },
+    "cli": {
+      "type": "string"
+    }
+  }
+}

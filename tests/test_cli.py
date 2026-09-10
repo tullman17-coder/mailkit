@@ -128,6 +128,7 @@ def test_help_lists_required_commands():
         "subscriptions",
         "doctor",
         "desktop",
+        "pair",
     ):
         assert token in help_text
 

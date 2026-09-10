@@ -23,14 +23,15 @@ from mailkit.service import is_running, read_pid, spawn_background, stop_daemon
 
 EPILOG = """
 examples:
-  mailkit service start
-  mailkit demo
+  mailkit desktop
+  mailkit pair --lan
+  mailkit -o json messages list --account work --mailbox inbox --unread
+  mailkit events stream --account work --subject "Invoice" -o ndjson
   mailkit accounts add --address you@gmail.com --auth oauth2
-  mailkit accounts add --address you@custom.com --imap-host imap.example.com --smtp-host smtp.example.com
-  mailkit messages list --account work --mailbox inbox --unread
-  mailkit messages get --account work --mailbox INBOX 12345
-  mailkit events stream --account work --subject "Invoice"
   mailkit send --account work --to someone@example.com --subject Hello --body "Hi"
+
+Native desktop and iOS/Android apps talk to this engine. AI agents use this CLI
+(-o json|ndjson) or /v1 — they do not scrape the GUI.
 
 Navigation is always account → mailbox → message. Use --unified only when you
 explicitly want every account in one list; each row still carries account_id.
@@ -40,7 +41,7 @@ explicitly want every account in one list; each row still carries account_id.
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="mailkit",
-        description="Local multi-account email engine, daemon, and CLI. Connects directly to your providers.",
+        description="Native desktop and mobile email app with a local engine and CLI for AI agents.",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -188,12 +189,20 @@ def build_parser() -> argparse.ArgumentParser:
     pl.set_defaults(plug_cmd="list")
 
     schema = sub.add_parser("schema", help="print versioned JSON schemas")
-    schema.add_argument("name", nargs="?", default="event", help="event|message|account|subscription|error")
+    schema.add_argument("name", nargs="?", default="event", help="event|message|account|subscription|error|pair")
 
-    desk = sub.add_parser("desktop", help="open the local Mailkit window (starts the engine if needed)")
-    demo = sub.add_parser("demo", help="seed a local mailbox and serve the desktop UI without IMAP")
-    demo.add_argument("--run", action="store_true", help="run the engine in the foreground after seeding")
+    desk = sub.add_parser("desktop", help="open the native desktop app (starts the engine if needed)")
     desk.set_defaults(desk_cmd="open")
+
+    demo = sub.add_parser("demo", help="seed a local mailbox so the native apps can run without IMAP")
+    demo.add_argument("--run", action="store_true", help="run the engine in the foreground after seeding")
+    demo.add_argument("--desktop", action="store_true", help="open the native desktop window after seeding")
+    demo.add_argument("--lan", action="store_true", help="bind on the LAN so a phone can pair")
+
+    pair = sub.add_parser("pair", help="print a pairing payload for the iOS/Android app or an agent")
+    pair.add_argument("--lan", action="store_true", help="bind 0.0.0.0 so devices on this Wi-Fi can connect")
+    pair.add_argument("--off", action="store_true", help="bind loopback only (phones on the LAN cannot reach you)")
+    pair.add_argument("--no-start", action="store_true", help="do not start or restart the engine")
 
     doc = sub.add_parser("doctor", help="diagnose and safely repair the local engine")
     doc.add_argument("mode", nargs="?", choices=["run", "loop", "watchdog"], default="run")
@@ -301,6 +310,8 @@ def _dispatch(args, root: Path, out: Printer) -> int:
         from mailkit.desktop import run_desktop
 
         return run_desktop(root)
+    if args.cmd == "pair":
+        return _pair(args, root, out)
     if args.cmd == "demo":
         return _demo(args, root, out)
     if args.cmd == "doctor":
@@ -384,29 +395,63 @@ def _service(args, root, out, client: ApiClient) -> int:
     return ExitCode.USAGE
 
 
+def _pair(args, root: Path, out: Printer) -> int:
+    from mailkit.errors import UsageError
+    from mailkit.pair import apply_pair_mode
+
+    if args.lan and args.off:
+        raise UsageError("use --lan or --off, not both")
+    payload = apply_pair_mode(root, lan=bool(args.lan), off=bool(args.off), start=not args.no_start)
+    text = (
+        f"phone app: {payload['deeplink']}\n"
+        f"engine:    {payload['url']}\n"
+        f"agents:    mailkit -o json messages list --mailbox inbox\n"
+        f"LAN bind:  {'on' if payload['allow_remote'] else 'off (mailkit pair --lan)'}"
+    )
+    out.data(payload, text=text)
+    return 0
+
+
 def _demo(args, root: Path, out: Printer) -> int:
     from mailkit.demo import seed_demo
-    from mailkit.service import load_or_create_token
+    from mailkit.pair import apply_pair_mode, build_pair_payload
 
     acc = seed_demo(root)
-    cfg = load_config(root)
-    token = load_or_create_token(root)
-    origin = f"http://{cfg.daemon.host}:{cfg.daemon.port}"
-    url = f"{origin}/?token={token}"
-    payload = {"account": acc.id, "url": url, "token": token}
-    if getattr(args, "run", False):
-        out.data(payload, text=f"demo mailbox {acc.id}\n{url}")
+    if args.lan:
+        pair = apply_pair_mode(root, lan=True, start=not args.run)
+    else:
+        pair = build_pair_payload(root)
+        if not args.run and not is_running(root):
+            pid = spawn_background(root)
+            pair["pid"] = pid
+            pair["status"] = "started"
+        else:
+            pair["pid"] = read_pid(root)
+            pair["status"] = "running" if is_running(root) else "stopped"
+    payload = {
+        "account": acc.id,
+        "pair": pair,
+        "url": pair.get("url"),
+        "token": pair.get("token"),
+        "deeplink": pair.get("deeplink"),
+    }
+    text = (
+        f"demo mailbox {acc.id}\n"
+        f"desktop: mailkit desktop\n"
+        f"phone:   {pair.get('deeplink')}\n"
+        f"agents:  mailkit -o json messages list --account {acc.id} --mailbox inbox"
+    )
+    if args.desktop:
+        out.data(payload, text=text)
+        from mailkit.desktop import run_desktop
+
+        return run_desktop(root)
+    if args.run:
+        out.data(payload, text=text)
         from mailkit.daemon import run
 
         return run(root, foreground=True)
-    if not is_running(root):
-        pid = spawn_background(root)
-        payload["pid"] = pid
-        payload["status"] = "started"
-    else:
-        payload["pid"] = read_pid(root)
-        payload["status"] = "running"
-    out.data(payload, text=f"demo mailbox {acc.id} — open {url}")
+    out.data(payload, text=text)
     return 0
 
 

@@ -14,7 +14,7 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/health` | liveness (no auth) |
+| GET | `/v1/pair` | pairing payload for the iOS/Android app (`mailkit.pair.v1`) |
 | GET | `/v1/status` | watchers, last event cursor |
 | GET/POST/DELETE | `/v1/accounts` `/v1/accounts/{id}` | accounts |
 | POST | `/v1/accounts/{id}/test` | IMAP login + folder list |

@@ -44,6 +44,10 @@ def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) ->
         return ok({"status": "ok", "ts": utcnow()})
     if method == "GET" and rest == ["status"]:
         return ok(_status(app))
+    if method == "GET" and rest == ["pair"]:
+        from mailkit.pair import build_pair_payload
+
+        return ok(build_pair_payload(app.runtime.root, token=app.token))
     if rest[:1] == ["doctor"]:
         return _doctor(app, method, rest[1:], qs, body)
     if rest[:1] == ["accounts"]:

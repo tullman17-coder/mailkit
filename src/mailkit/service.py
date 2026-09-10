@@ -125,6 +125,8 @@ _CLI_HEADS = frozenset(
         "accounts",
         "schema",
         "desktop",
+        "demo",
+        "pair",
         "doctor",
         "plugins",
         "messages",

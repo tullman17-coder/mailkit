@@ -20,7 +20,7 @@ See `examples/config.toml`. Important keys:
 [daemon]
 host = "127.0.0.1"   # loopback by default
 port = 8765
-allow_remote = false
+allow_remote = false   # true when phones on this Wi-Fi need mailkit pair --lan
 
 [defaults]
 account = "work"     # used when --account is omitted and only if set
