@@ -443,31 +443,26 @@ def _accounts(args, root, out, client: ApiClient) -> int:
         if args.client_secret:
             body["client_secret"] = args.client_secret
         if args.auth == "oauth2":
-            from mailkit.api.routes import _account_from_body
+            from mailkit.api.routes import _account_from_body, save_new_account
             from mailkit.oauth_flow import run_local_oauth
 
-            acc = _account_from_body(body)
-            runtime.config.accounts[acc.id] = acc
-            save_config(runtime.config, root)
+            acc = _account_from_body(body, runtime.config.accounts)
             secrets = {}
             if args.client_secret:
                 secrets["client_secret"] = args.client_secret
             tokens = run_local_oauth(acc, secrets)
-            runtime.vault.put_account(acc.id, {**secrets, **tokens})
+            save_new_account(runtime, acc, {**secrets, **tokens})
             out.data(_acc_row(acc), text=f"added {acc.id} ({acc.address}) via oauth2")
             return 0
         if is_running(root):
             created = _unwrap(client.request("POST", "/v1/accounts", body=body))
             out.data(created)
             return 0
-        from mailkit.api.routes import _account_from_body
+        from mailkit.api.routes import _account_from_body, save_new_account
 
-        acc = _account_from_body(body)
-        runtime.config.accounts[acc.id] = acc
-        save_config(runtime.config, root)
+        acc = _account_from_body(body, runtime.config.accounts)
         secrets = {k: body[k] for k in ("password", "username", "client_secret") if body.get(k)}
-        if secrets:
-            runtime.vault.put_account(acc.id, secrets)
+        save_new_account(runtime, acc, secrets)
         out.data(_acc_row(acc), text=f"added {acc.id} ({acc.address})")
         return 0
     return ExitCode.USAGE

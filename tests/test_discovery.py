@@ -1,3 +1,5 @@
+import pytest
+
 from mailkit.discovery import discover, domain_of
 
 
@@ -32,6 +34,45 @@ def test_mx_microsoft():
         srv_resolver=lambda _n: [],
     )
     assert spec.provider_id == "graph"
+    assert spec.smtp_host == "smtp.office365.com"
+    assert spec.source == "mx"
+
+
+@pytest.mark.parametrize("domain,imap,smtp,port", [
+    ("gmail.com", "imap.gmail.com", "smtp.gmail.com", 587),
+    ("outlook.com", "outlook.office365.com", "smtp-mail.outlook.com", 587),
+    ("icloud.com", "imap.mail.me.com", "smtp.mail.me.com", 587),
+    ("yahoo.com", "imap.mail.yahoo.com", "smtp.mail.yahoo.com", 587),
+    ("aol.com", "imap.aol.com", "smtp.aol.com", 465),
+    ("fastmail.com", "imap.fastmail.com", "smtp.fastmail.com", 587),
+    ("zoho.com", "imap.zoho.com", "smtp.zoho.com", 587),
+    ("gmx.com", "imap.gmx.com", "mail.gmx.com", 587),
+    ("mail.com", "imap.mail.com", "smtp.mail.com", 587),
+    ("ionos.com", "imap.ionos.com", "smtp.ionos.com", 465),
+])
+def test_ten_provider_presets_are_encrypted(domain, imap, smtp, port):
+    def no_dns(_name):
+        pytest.fail("Known provider should not need DNS discovery")
+
+    spec = discover(f"user@{domain.upper()}", mx_resolver=no_dns, srv_resolver=no_dns)
+    assert spec.imap_host == imap
+    assert spec.imap_port == 993 and spec.imap_tls
+    assert spec.smtp_host == smtp and spec.smtp_port == port
+    assert spec.smtp_tls == (port == 465)
+    assert spec.smtp_starttls == (port == 587)
+    assert spec.source == "well-known"
+
+
+def test_microsoft_consumer_and_business_use_imap_oauth():
+    for domain in ("outlook.com", "hotmail.com", "live.com", "msn.com", "office365.com"):
+        spec = discover(f"user@{domain}")
+        assert spec.smtp_host == ("smtp.office365.com" if domain == "office365.com" else "smtp-mail.outlook.com")
+        assert spec.auth_hint == "oauth2"
+        assert spec.oauth_scopes == [
+            "https://outlook.office.com/IMAP.AccessAsUser.All",
+            "https://outlook.office.com/SMTP.Send",
+            "offline_access",
+        ]
 
 
 def test_srv_custom_domain():

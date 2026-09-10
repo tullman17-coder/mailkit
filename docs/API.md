@@ -17,7 +17,10 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 | GET | `/v1/health` | liveness (no auth) |
 | GET | `/v1/status` | watchers, last event cursor |
 | GET/POST/DELETE | `/v1/accounts` `/v1/accounts/{id}` | accounts |
-| POST | `/v1/accounts/{id}/test` | IMAP login + folder list |
+| POST | `/v1/accounts/validate` | Authenticate proposed IMAP and SMTP settings without saving or sending |
+| POST | `/v1/accounts/{id}/test` | Authenticate IMAP and SMTP; list folders; send no mail |
+| POST | `/v1/oauth/begin` | Native Google/Microsoft browser sign-in URL and expiring PKCE state |
+| POST | `/v1/oauth/complete` | Validate callback, exchange code, test both protocols, save account |
 | GET | `/v1/mailboxes?account=` | section-ordered mailboxes |
 | GET | `/v1/messages?account=&mailbox=&unread=&flagged=&tagged=&since=&before=` | list |
 | GET | `/v1/messages/{id}` | full message |
@@ -38,6 +41,11 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 | POST | `/v1/provider-hooks/graph` | Graph validation + notifications |
 
 ## Real-time
+
+Native sign-in and secure remote engine setup: [Apple clients](APPLE.md).
+Account IDs are opaque; new defaults derive from the full email address, and
+duplicate explicit IDs are rejected. Treat `401` response bodies as authoritative:
+an email-provider authentication failure differs from an invalid engine bearer token.
 
 - **SSE** `GET /v1/events/stream?...filters`: `id`, `event`, `data` fields. Last-Event-ID is the event id cursor.
 - **WebSocket** `GET /v1/events/ws?token=`: text frames of `mailkit.event.v1`. Client may send `{"op":"subscribe","filter":{...}}`, `{"op":"ack","subscription_id":"...","event_id":"..."}`, `{"op":"ping"}`.

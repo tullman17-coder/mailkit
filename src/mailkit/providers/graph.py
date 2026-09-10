@@ -78,7 +78,8 @@ class GraphPlugin:
         }
 
     def create(self, account: AccountConfig, secrets: dict[str, Any], *, store=None) -> GraphProvider:
-        spec = WELL_KNOWN["outlook.com"]
+        domain = account.address.rsplit("@", 1)[-1].lower()
+        spec = WELL_KNOWN["outlook.com" if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"} else "office365.com"]
         if not account.imap.host:
             account.imap.host = spec.imap_host
             account.imap.port = spec.imap_port

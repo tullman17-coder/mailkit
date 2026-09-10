@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import hashlib
+import re
+from contextlib import closing
 import threading
 from typing import Any
 from urllib.parse import unquote
@@ -13,7 +17,7 @@ from dataclasses import fields
 
 from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, save_config
 from mailkit.discovery import discover
-from mailkit.errors import NotFoundError, UsageError
+from mailkit.errors import NotFoundError, UsageError, ConflictError
 from mailkit.ids import new_id
 from mailkit.models import EventFilter, Mailbox, fail, ok, utcnow
 from mailkit.rules import Rule, RulesEngine, event_filter_match
@@ -33,6 +37,8 @@ def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) ->
         return ok(_status(app))
     if rest[:1] == ["doctor"]:
         return _doctor(app, method, rest[1:], qs, body)
+    if rest[:1] == ["oauth"]:
+        return _oauth(app, method, rest[1:], body)
     if rest[:1] == ["accounts"]:
         return _accounts(app, method, rest[1:], qs, body)
     if rest[:1] == ["mailboxes"]:
@@ -104,13 +110,18 @@ def _account_view(acc: AccountConfig) -> dict:
 def _accounts(app: App, method: str, rest: list[str], qs: dict, body: dict):
     if method == "GET" and not rest:
         return ok([_account_view(a) for a in app.runtime.config.accounts.values()])
+    if method == "POST" and rest == ["validate"]:
+        acc = _account_from_body(body, app.runtime.config.accounts)
+        return ok(_validate_account(app, acc, _secrets(body)))
     if method == "POST" and not rest:
-        acc = _account_from_body(body)
-        app.runtime.config.accounts[acc.id] = acc
-        save_config(app.runtime.config, app.runtime.root)
-        secrets = {k: body[k] for k in ("password", "username", "refresh_token", "access_token", "client_secret") if body.get(k)}
-        if secrets:
-            app.runtime.vault.put_account(acc.id, secrets)
+        acc = _account_from_body(body, app.runtime.config.accounts)
+        secrets = _secrets(body)
+        if acc.auth in {"oauth2", "xoauth2"} and not secrets.get("access_token"):
+            raise UsageError("Complete OAuth sign-in before adding this account")
+        if acc.auth == "password" and not secrets.get("password"):
+            raise UsageError("A password or app password is required")
+        with app.account_lock:
+            save_new_account(app.runtime, acc, secrets)
         if acc.enabled:
             app.supervisor.start_account(acc.id)
         return ok(_account_view(acc))
@@ -130,15 +141,74 @@ def _accounts(app: App, method: str, rest: list[str], qs: dict, body: dict):
         return ok({"removed": account_id})
     if rest[1:] == ["test"] and method == "POST":
         provider, _, _ = app.runtime.provider_for(account_id)
-        provider.connect()
-        boxes = provider.list_mailboxes()
-        provider.close()
-        return ok({"ok": True, "mailboxes": [b.name for b in boxes]})
+        with closing(provider):
+            return ok(provider.test_connection())
     if rest[1:] == ["mailboxes"] and method == "GET":
         provider, _, _ = app.runtime.provider_for(account_id)
-        boxes = provider.list_mailboxes()
-        return ok([b.__dict__ if hasattr(b, "__dict__") else b for b in boxes])
+        with closing(provider):
+            boxes = provider.list_mailboxes()
+            return ok([_box_dict(b, account_id) for b in boxes])
     raise NotFoundError("Unknown accounts route")
+
+
+def _secrets(body: dict) -> dict:
+    keys = ("password", "username", "smtp_password", "smtp_username", "refresh_token", "access_token", "client_secret")
+    if any(body.get(key) is not None and not isinstance(body[key], str) for key in keys):
+        raise UsageError("Credentials must be strings")
+    return {key: body[key] for key in keys if body.get(key)}
+
+
+def save_new_account(runtime, acc: AccountConfig, secrets: dict) -> None:
+    if acc.id in runtime.config.accounts:
+        raise ConflictError(f"Account id already exists: {acc.id}")
+    runtime.vault.put_account(acc.id, secrets)
+    runtime.config.accounts[acc.id] = acc
+    try:
+        save_config(runtime.config, runtime.root)
+    except Exception:
+        runtime.config.accounts.pop(acc.id, None)
+        runtime.vault.delete_account(acc.id)
+        raise
+
+
+def _validate_account(app: App, acc: AccountConfig, secrets: dict) -> dict:
+    plugin = app.runtime.plugins.provider_for(acc)
+    if not plugin:
+        raise UsageError("Unsupported provider")
+    with closing(plugin.create(acc, secrets, store=None)) as provider:
+        return provider.test_connection()
+
+
+def _oauth(app: App, method: str, rest: list[str], body: dict):
+    from mailkit.discovery import WELL_KNOWN
+    if method == "POST" and rest == ["begin"]:
+        provider = body.get("provider")
+        if provider not in {"gmail", "graph"}:
+            raise UsageError("Native OAuth supports gmail and graph")
+        client_id = body.get("client_id")
+        if not isinstance(client_id, str) or not client_id.strip() or len(client_id) > 512:
+            raise UsageError("A registered native OAuth client_id is required")
+        address = body.get("address") or ""
+        if not isinstance(address, str):
+            raise UsageError("address must be a string")
+        domain = address.rsplit("@", 1)[-1].lower()
+        spec = WELL_KNOWN["gmail.com" if provider == "gmail" else
+                          "outlook.com" if domain in {"outlook.com", "hotmail.com", "live.com", "msn.com"} else "office365.com"]
+        # Fixed endpoints and hosts prevent returning OAuth credentials to caller-supplied servers.
+        data = {key: body[key] for key in ("id", "name", "address") if key in body}
+        data.update(discover=False, provider=provider, auth="oauth2", watch="idle",
+                    imap=spec.to_dict()["imap"], smtp=spec.to_dict()["smtp"],
+                    oauth={**spec.to_dict()["oauth"], "client_id": client_id.strip()})
+        acc = _account_from_body(data, app.runtime.config.accounts)
+        return ok(app.oauth_sessions.begin(acc, body.get("redirect_uri")))
+    if method == "POST" and rest == ["complete"]:
+        acc, secrets = app.oauth_sessions.complete(body.get("state"), body.get("callback_url"))
+        _validate_account(app, acc, secrets)
+        with app.account_lock:
+            save_new_account(app.runtime, acc, secrets)
+        app.supervisor.start_account(acc.id)
+        return ok(_account_view(acc))
+    raise NotFoundError("Unknown OAuth route")
 
 
 def _fill(cls, *dicts: dict):
@@ -149,21 +219,65 @@ def _fill(cls, *dicts: dict):
     allowed = {f.name for f in fields(cls)}
     kwargs = {k: v for k, v in merged.items() if k in allowed and v is not None}
     if "port" in kwargs:
-        kwargs["port"] = int(kwargs["port"])
+        try:
+            if isinstance(kwargs["port"], bool):
+                raise ValueError
+            kwargs["port"] = int(kwargs["port"])
+        except (ValueError, TypeError):
+            raise UsageError("Mail server port must be an integer") from None
+    for key in ("tls", "starttls"):
+        if key in kwargs and not isinstance(kwargs[key], bool):
+            raise UsageError(f"{key} must be a boolean")
     return cls(**kwargs)
 
 
-def _account_from_body(body: dict) -> AccountConfig:
+def _account_from_body(body: dict, existing: dict | None = None) -> AccountConfig:
     address = body.get("address") or ""
-    if not address:
-        raise UsageError("address is required")
-    acc_id = body.get("id") or address.split("@")[0].replace(".", "-")
+    if not isinstance(address, str) or len(address) > 254 or not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+", address):
+        raise UsageError("A valid email address is required")
+    acc_id = body.get("id") or "acc_" + hashlib.sha256(address.casefold().encode()).hexdigest()[:24]
+    if not isinstance(acc_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._@+\-]{0,253}", acc_id):
+        raise UsageError("Account id may contain letters, digits, dots, hyphens, underscores, + and @")
+    if existing is not None and acc_id in existing:
+        raise ConflictError(f"Account id already exists: {acc_id}")
+    for key in ("imap", "smtp", "oauth", "folders"):
+        if body.get(key) is not None and not isinstance(body[key], dict):
+            raise UsageError(f"{key} must be an object")
+    for key in ("discover", "enabled"):
+        if key in body and not isinstance(body[key], bool):
+            raise UsageError(f"{key} must be a boolean")
+    for key in ("name", "provider", "auth", "watch"):
+        if body.get(key) is not None and not isinstance(body[key], str):
+            raise UsageError(f"{key} must be a string")
     discovered = None
     if body.get("discover", True) and not (body.get("imap") or {}).get("host"):
         discovered = discover(address)
     imap = _fill(ImapSettings, discovered.to_dict()["imap"] if discovered else {}, body.get("imap") or {})
     smtp = _fill(SmtpSettings, discovered.to_dict()["smtp"] if discovered else {}, body.get("smtp") or {})
+    for settings in (imap, smtp):
+        host = settings.host
+        if not isinstance(host, str) or not host or len(host) > 253:
+            raise UsageError("Both IMAP and SMTP server hosts are required")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?", host):
+                raise UsageError("Invalid mail server hostname")
+        if not 1 <= settings.port <= 65535:
+            raise UsageError("Mail server port must be between 1 and 65535")
+        if not (settings.tls or settings.starttls):
+            raise UsageError("Mail authentication requires TLS or STARTTLS")
+        if not isinstance(settings.timeout, (int, float)) or not 1 <= settings.timeout <= 120:
+            raise UsageError("Mail server timeout must be between 1 and 120 seconds")
     oauth_body = body.get("oauth") or {}
+    for key, value in oauth_body.items():
+        if key == "scopes":
+            if not isinstance(value, list) or any(not isinstance(scope, str) for scope in value):
+                raise UsageError("OAuth scopes must be a list of strings")
+        elif not isinstance(value, str):
+            raise UsageError(f"OAuth {key} must be a string")
+    if any(not isinstance(value, str) for value in (body.get("folders") or {}).values()):
+        raise UsageError("Folder overrides must be strings")
     oauth = OAuthSettings(
         client_id=oauth_body.get("client_id") or "",
         tenant=oauth_body.get("tenant") or "common",
@@ -174,9 +288,19 @@ def _account_from_body(body: dict) -> AccountConfig:
         pubsub_subscription=oauth_body.get("pubsub_subscription") or "",
         graph_notify_url=oauth_body.get("graph_notify_url") or "",
     )
-    folders = FolderSettings(**(body.get("folders") or {}))
+    folders = _fill(FolderSettings, body.get("folders") or {})
     provider = body.get("provider") or (discovered.provider_id if discovered else "imap")
     auth = body.get("auth") or (discovered.auth_hint if discovered else "password")
+    if provider not in {"auto", "imap", "gmail", "graph", "yahoo", "outlook", "microsoft"}:
+        raise UsageError("Unsupported mail provider")
+    if auth not in {"password", "app_password", "oauth2", "xoauth2"}:
+        raise UsageError("Unsupported authentication method")
+    try:
+        poll_interval = int(body.get("poll_interval") or 45)
+    except (TypeError, ValueError):
+        raise UsageError("poll_interval must be an integer") from None
+    if poll_interval < 5:
+        raise UsageError("poll_interval must be at least five seconds")
     return AccountConfig(
         id=acc_id,
         name=body.get("name") or address,
@@ -185,7 +309,7 @@ def _account_from_body(body: dict) -> AccountConfig:
         auth=auth if auth != "app_password" else "password",
         enabled=body.get("enabled", True),
         watch=body.get("watch") or "auto",
-        poll_interval=int(body.get("poll_interval") or 45),
+        poll_interval=poll_interval,
         imap=imap,
         smtp=smtp,
         oauth=oauth,
@@ -197,8 +321,9 @@ def _mailboxes(app: App, method: str, rest: list[str], qs: dict, body: dict):
     account_id = (qs.get("account") or [None])[0]
     acc = app.runtime.config.require_account(account_id)
     provider, _, _ = app.runtime.provider_for(acc.id)
-    boxes = provider.list_mailboxes()
-    return ok([_box_dict(b, acc.id) for b in boxes])
+    with closing(provider):
+        boxes = provider.list_mailboxes()
+        return ok([_box_dict(b, acc.id) for b in boxes])
 
 
 def _box_dict(box, account_id: str) -> dict:
@@ -223,15 +348,16 @@ def _messages(app: App, method: str, rest: list[str], qs: dict, body: dict):
         return _list_messages(app, params)
     if rest and method == "GET" and rest[0] not in {"search"}:
         msg = app.runtime.store.get_message(rest[0])
-        if msg:
+        if msg and (qs.get("live") or ["true"])[0].lower() == "false":
             return ok(msg)
-        # live fetch
-        account_id = (qs.get("account") or [None])[0]
-        mailbox = (qs.get("mailbox") or ["INBOX"])[0]
+        account_id = (msg or {}).get("account_id") or (qs.get("account") or [None])[0]
+        mailbox = (msg or {}).get("mailbox") or (qs.get("mailbox") or ["INBOX"])[0]
         acc = app.runtime.config.require_account(account_id)
+        native_id = (msg or {}).get("native_id") or (msg or {}).get("uid") or rest[0]
         provider, _, _ = app.runtime.provider_for(acc.id)
-        fetched = provider.get_message(mailbox, rest[0], peek=True)
-        return ok(fetched.to_dict())
+        with closing(provider):
+            fetched = provider.get_message(mailbox, str(native_id), peek=True)
+            return ok(fetched.to_dict())
     if rest and method == "POST" and len(rest) >= 2:
         msg_id = rest[0]
         action = rest[1]
@@ -249,7 +375,10 @@ def _list_messages(app: App, params: dict):
     unread = params.get("unread")
     flagged = params.get("flagged")
     tagged = params.get("tagged") or params.get("tag")
-    limit = int(params.get("limit") or 50)
+    try:
+        limit = max(1, min(int(params.get("limit") or 50), 500))
+    except (TypeError, ValueError):
+        raise UsageError("limit must be an integer") from None
     if unified:
         rows = app.runtime.store.list_messages(
             unread=_truth(unread),
@@ -262,38 +391,30 @@ def _list_messages(app: App, params: dict):
         )
         return ok(rows)
     acc = app.runtime.config.require_account(account_id)
-    # Resolve section names like inbox/saved/sent
-    provider, account, _ = app.runtime.provider_for(acc.id)
-    boxes = provider.list_mailboxes()
     folder = mailbox
-    if mailbox.lower() in {"inbox", "saved", "sent", "drafts", "archives", "trash", "junk"}:
-        role = mailbox.lower()
-        match = next((b for b in boxes if getattr(b, "role", "") == role), None)
-        if role == "saved" and (not match or match.name.upper() == "INBOX"):
-            folder = match.name if match else "INBOX"
-            params["flagged"] = "true"
-        elif match:
-            folder = match.name
     live = str(params.get("live") or "true").lower() != "false"
     if live:
-        try:
+        provider, _, _ = app.runtime.provider_for(acc.id)
+        with closing(provider):
+            boxes = provider.list_mailboxes()
+            if mailbox.lower() in {"inbox", "saved", "sent", "drafts", "archives", "trash", "junk"}:
+                role = mailbox.lower()
+                match = next((b for b in boxes if getattr(b, "role", "") == role), None)
+                if role == "saved" and (not match or match.name.upper() == "INBOX"):
+                    folder = match.name if match else "INBOX"
+                    params["flagged"] = "true"
+                elif match:
+                    folder = match.name
             messages = provider.list_messages(
-                folder,
-                unread=_truth(params.get("unread")),
-                flagged=_truth(params.get("flagged")),
-                since=params.get("since"),
-                before=params.get("before"),
-                from_=params.get("from") or params.get("sender"),
-                subject=params.get("subject"),
-                text=params.get("query") or params.get("text"),
-                limit=limit,
+                folder, unread=_truth(params.get("unread")), flagged=_truth(params.get("flagged")),
+                since=params.get("since"), before=params.get("before"),
+                from_=params.get("from") or params.get("sender"), subject=params.get("subject"),
+                text=params.get("query") or params.get("text"), limit=limit,
             )
             rows = [m.summary() for m in messages]
             if tagged:
                 rows = [r for r in rows if tagged in (r.get("tags") or [])]
             return ok(rows)
-        except Exception:
-            pass
     rows = app.runtime.store.list_messages(
         account_id=acc.id,
         mailbox=folder,
@@ -323,46 +444,49 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
     native = (stored or {}).get("native_id") or (stored or {}).get("uid") or body.get("native_id")
     acc = app.runtime.config.require_account(account_id)
     provider, _, _ = app.runtime.provider_for(acc.id)
-    if action == "move":
-        dest = body.get("mailbox") or body.get("dest")
-        if not dest:
-            raise UsageError("move requires mailbox")
-        provider.move(mailbox, str(native), dest)
-        if stored:
-            stored["mailbox"] = dest
-            app.runtime.store.conn.execute(
-                "UPDATE messages SET mailbox=?, updated_at=? WHERE id=?",
-                (dest, utcnow(), msg_id),
-            )
-            app.runtime.store.conn.commit()
-        return ok({"moved": msg_id, "mailbox": dest, "account_id": acc.id})
-    if action in {"flag", "unflag", "read", "unread"}:
-        add, remove = [], []
-        if action == "flag":
-            add = ["Flagged"]
-        elif action == "unflag":
-            remove = ["Flagged"]
-        elif action == "read":
-            add = ["Seen"]
-        else:
-            remove = ["Seen"]
-        provider.set_flags(mailbox, str(native), add=add, remove=remove)
-        return ok({"id": msg_id, "action": action})
-    if action == "tag":
-        tags = body.get("tags") or body.get("tag") or []
-        if isinstance(tags, str):
-            tags = [tags]
-        current = (stored or {}).get("tags") or []
-        updated = app.runtime.store.set_tags(msg_id, list(current) + list(tags))
-        return ok(updated or {"id": msg_id, "tags": tags})
-    if action == "untag":
-        tags = body.get("tags") or []
-        if isinstance(tags, str):
-            tags = [tags]
-        current = [t for t in ((stored or {}).get("tags") or []) if t not in tags]
-        updated = app.runtime.store.set_tags(msg_id, current)
-        return ok(updated)
-    raise UsageError(f"Unknown message action {action}")
+    with closing(provider):
+        if action in {"move", "flag", "unflag", "read", "unread"} and not native:
+            raise UsageError("A native message id is required")
+        if action == "move":
+            dest = body.get("mailbox") or body.get("dest")
+            if not dest:
+                raise UsageError("move requires mailbox")
+            provider.move(mailbox, str(native), dest)
+            if stored:
+                stored["mailbox"] = dest
+                app.runtime.store.conn.execute(
+                    "UPDATE messages SET mailbox=?, updated_at=? WHERE id=?",
+                    (dest, utcnow(), msg_id),
+                )
+                app.runtime.store.conn.commit()
+            return ok({"moved": msg_id, "mailbox": dest, "account_id": acc.id})
+        if action in {"flag", "unflag", "read", "unread"}:
+            add, remove = [], []
+            if action == "flag":
+                add = ["Flagged"]
+            elif action == "unflag":
+                remove = ["Flagged"]
+            elif action == "read":
+                add = ["Seen"]
+            else:
+                remove = ["Seen"]
+            provider.set_flags(mailbox, str(native), add=add, remove=remove)
+            return ok({"id": msg_id, "action": action})
+        if action == "tag":
+            tags = body.get("tags") or body.get("tag") or []
+            if isinstance(tags, str):
+                tags = [tags]
+            current = (stored or {}).get("tags") or []
+            updated = app.runtime.store.set_tags(msg_id, list(current) + list(tags))
+            return ok(updated or {"id": msg_id, "tags": tags})
+        if action == "untag":
+            tags = body.get("tags") or []
+            if isinstance(tags, str):
+                tags = [tags]
+            current = [t for t in ((stored or {}).get("tags") or []) if t not in tags]
+            updated = app.runtime.store.set_tags(msg_id, current)
+            return ok(updated)
+        raise UsageError(f"Unknown message action {action}")
 
 
 def _send(app: App, body: dict):
@@ -382,8 +506,9 @@ def _send(app: App, body: dict):
         html=body.get("html"),
     )
     provider, _, _ = app.runtime.provider_for(acc.id)
-    mid = provider.send(acc.address, to + list(body.get("cc") or []) + list(body.get("bcc") or []), msg.as_bytes())
-    return ok({"message_id": mid, "account_id": acc.id})
+    with closing(provider):
+        mid = provider.send(acc.address, to + list(body.get("cc") or []) + list(body.get("bcc") or []), msg.as_bytes())
+        return ok({"message_id": mid, "account_id": acc.id})
 
 
 def _reply(app: App, body: dict):
@@ -410,14 +535,15 @@ def _reply(app: App, body: dict):
         references=refs,
     )
     provider, _, _ = app.runtime.provider_for(acc.id)
-    mid = provider.send(acc.address, to, msg.as_bytes())
-    native = stored.get("native_id") or stored.get("uid")
-    if native:
-        try:
-            provider.set_flags(stored.get("mailbox") or "INBOX", str(native), add=["Answered"])
-        except Exception:
-            pass
-    return ok({"message_id": mid, "in_reply_to": stored.get("message_id")})
+    with closing(provider):
+        mid = provider.send(acc.address, to, msg.as_bytes())
+        native = stored.get("native_id") or stored.get("uid")
+        if native and acc.id == stored.get("account_id"):
+            try:
+                provider.set_flags(stored.get("mailbox") or "INBOX", str(native), add=["Answered"])
+            except Exception:
+                pass
+        return ok({"message_id": mid, "in_reply_to": stored.get("message_id")})
 
 
 def _events(app: App, method: str, rest: list[str], qs: dict, body: dict, handler):

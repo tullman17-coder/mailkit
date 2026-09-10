@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import socket
 import ssl
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
@@ -17,6 +18,7 @@ from mailkit.events import EventBus
 from mailkit.logutil import get_logger
 from mailkit.models import EventFilter, fail, ok
 from mailkit.runtime import Runtime
+from mailkit.oauth_flow import NativeOAuthSessions
 from mailkit.supervisor import Supervisor
 from mailkit.webhooks import WebhookDispatcher
 
@@ -33,6 +35,8 @@ class App:
     webhooks: WebhookDispatcher
     token: str
     started_at: str
+    oauth_sessions: NativeOAuthSessions = field(default_factory=NativeOAuthSessions)
+    account_lock: Any = field(default_factory=threading.RLock)
 
 
 @dataclass
@@ -69,7 +73,7 @@ class Handler(BaseHTTPRequestHandler):
         if not token:
             token = parse_qs(urlparse(self.path).query).get("token", [""])[0]
         # Loopback is still token-gated so other local users cannot call the API.
-        return token == self.app.token
+        return bool(token and self.app.token) and hmac.compare_digest(token.encode(), self.app.token.encode())
 
     def do_GET(self):  # noqa: N802
         self._dispatch()
@@ -93,7 +97,7 @@ class Handler(BaseHTTPRequestHandler):
     def _dispatch(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path in {"/v1/events/ws", "/v1/ws"}:
-            if not self._check_auth() and parse_qs(parsed.query).get("token", [""])[0] != self.app.token:
+            if not self._check_auth():
                 self._unauthorized()
                 return
             self._websocket(parsed)
@@ -101,11 +105,19 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_auth() and parsed.path not in {"/v1/health"}:
             self._unauthorized()
             return
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length < 0 or length > 1048576:
+                raise ValueError
+        except ValueError:
+            self._write(json_response(fail({"code": "usage", "message": "invalid or oversized request body"}), 400))
+            return
         raw = self.rfile.read(length) if length else b""
         try:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
-        except json.JSONDecodeError:
+            if not isinstance(payload, dict):
+                raise ValueError
+        except (ValueError, UnicodeDecodeError):
             self._write(json_response(fail({"code": "usage", "message": "invalid JSON"}), 400))
             return
         from mailkit.api.routes import dispatch
@@ -116,7 +128,8 @@ class Handler(BaseHTTPRequestHandler):
             from mailkit.errors import MailkitError
 
             if isinstance(exc, MailkitError):
-                self._write(json_response(fail(exc.to_dict()), exc.exit_code if exc.exit_code >= 400 else 400))
+                status = {"not_found": 404, "conflict": 409, "auth": 401, "network": 502}.get(exc.code, 400)
+                self._write(json_response(fail(exc.to_dict()), status))
                 return
             log.exception("api error")
             self._write(json_response(fail({"code": "error", "message": str(exc)}), 500))
@@ -247,6 +260,10 @@ def _ws_recv(sock: socket.socket) -> str | None:
 
 
 def serve_forever(app: App, host: str, port: int, *, stop: threading.Event | None = None) -> ThreadingHTTPServer:
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        from mailkit.errors import ConfigError
+
+        raise ConfigError("The API must bind to loopback; use an HTTPS reverse proxy for remote devices")
     Handler.app = app
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True

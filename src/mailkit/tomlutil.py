@@ -12,9 +12,9 @@ def dumps(data: dict[str, Any]) -> str:
     scalars: list[str] = []
     for key, value in data.items():
         if isinstance(value, dict):
-            tables.append((key, value))
+            tables.append((_format_key(key), value))
         elif isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
-            array_tables.append((key, value))
+            array_tables.append((_format_key(key), value))
         else:
             scalars.append(f"{_format_key(key)} = {_encode(value)}")
     if scalars:
@@ -28,7 +28,7 @@ def dumps(data: dict[str, Any]) -> str:
             nested_tables: list[tuple[str, dict]] = []
             for key, value in item.items():
                 if isinstance(value, dict):
-                    nested_tables.append((f"{name}.{key}", value))
+                    nested_tables.append((f"{name}.{_format_key(key)}", value))
                 else:
                     chunks.append(f"{_format_key(key)} = {_encode(value)}")
             chunks.append("")
@@ -42,7 +42,7 @@ def _dump_table(chunks: list[str], name: str, table: dict[str, Any]) -> None:
     scalars: list[str] = []
     for key, value in table.items():
         if isinstance(value, dict):
-            nested.append((f"{name}.{key}", value))
+            nested.append((f"{name}.{_format_key(key)}", value))
         else:
             scalars.append(f"{_format_key(key)} = {_encode(value)}")
     if scalars or not nested:

@@ -17,6 +17,8 @@ log = get_logger("mailkit.auth")
 
 
 def build_xoauth2(user: str, access_token: str) -> str:
+    if any(ord(c) < 32 for c in user + access_token):
+        raise AuthError("Invalid control character in OAuth credentials")
     raw = f"user={user}\x01auth=Bearer {access_token}\x01\x01"
     return base64.b64encode(raw.encode("utf-8")).decode("ascii")
 
@@ -31,6 +33,8 @@ def oauth_tokens(
     redirect_uri: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    if urllib.parse.urlparse(token_url).scheme != "https":
+        raise AuthError("OAuth token endpoints must use HTTPS")
     data: dict[str, str] = {"client_id": client_id}
     if client_secret:
         data["client_secret"] = client_secret
@@ -50,12 +54,17 @@ def oauth_tokens(
     req = urllib.request.Request(token_url, data=body, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        # Never forward a code, refresh token, or client secret on a redirect.
+        class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        with urllib.request.build_opener(NoRedirect).open(req, timeout=30) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
         raise NetworkError(f"OAuth token request failed: {exc}") from exc
     if "access_token" not in payload:
-        raise AuthError("OAuth token response missing access_token", details=payload)
+        raise AuthError("OAuth token response missing access_token")
     payload["obtained_at"] = int(time.time())
     return payload
 
@@ -83,29 +92,22 @@ class XOAuth2Auth:
         user = secrets.get("username") or account.address
         token = self._token(account, secrets)
         sasl = build_xoauth2(user, token)
-        typ, dat = client.authenticate("XOAUTH2", lambda _: sasl)
+        # imaplib performs the SASL base64 encoding itself.
+        response = iter((base64.b64decode(sasl),))
+        typ, dat = client.authenticate("XOAUTH2", lambda _: next(response, b""))
         if typ != "OK":
             raise AuthError(f"IMAP XOAUTH2 failed for {account.address}", details={"data": str(dat)})
 
     def prepare_smtp(self, client: Any, account: AccountConfig, secrets: dict[str, Any]) -> None:
-        import base64 as b64
-        import smtplib
-
         user = secrets.get("username") or account.address
         token = self._token(account, secrets)
         sasl = build_xoauth2(user, token)
         code, _ = client.docmd("AUTH", "XOAUTH2 " + sasl)
+        if code == 334:
+            # XOAUTH2 errors carry a challenge; finish it with an empty response.
+            code, _ = client.docmd("")
         if code != 235:
-            # SMTP XOAUTH2 sometimes wants the challenge form
-            try:
-                client.auth(
-                    "XOAUTH2",
-                    lambda _=None: b64.b64decode(sasl.encode()) if False else sasl,  # type: ignore
-                )
-            except smtplib.SMTPAuthenticationError as exc:
-                raise AuthError(f"SMTP XOAUTH2 failed for {account.address}") from exc
-            if code != 235 and code >= 400:
-                raise AuthError(f"SMTP XOAUTH2 failed for {account.address}")
+            raise AuthError(f"SMTP XOAUTH2 failed for {account.address}")
 
     def refresh(self, account: AccountConfig, secrets: dict[str, Any]) -> dict[str, Any] | None:
         if access_token_valid(secrets):

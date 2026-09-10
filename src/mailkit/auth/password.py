@@ -22,10 +22,10 @@ class PasswordAuth:
             raise AuthError(f"IMAP login failed for {account.address}")
 
     def prepare_smtp(self, client: Any, account: AccountConfig, secrets: dict[str, Any]) -> None:
-        password = secrets.get("password")
+        password = secrets.get("smtp_password") or secrets.get("password")
         if not password:
             raise AuthError(f"No password stored for account {account.id}")
-        user = secrets.get("username") or account.address
+        user = secrets.get("smtp_username") or secrets.get("username") or account.address
         client.login(user, password)
 
     def refresh(self, account: AccountConfig, secrets: dict[str, Any]) -> dict[str, Any] | None:
