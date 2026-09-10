@@ -437,19 +437,155 @@ select {
   display: block;
 }
 
-@media (max-width: 900px) {
+.mobile-bar {
+  display: none;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: var(--rule);
+  background: var(--color-burgundy);
+}
+
+.mobile-bar h2 {
+  margin: 0;
+  font-size: var(--text-md);
+  color: var(--color-accent);
+}
+
+@media (max-width: 860px) {
+  html,
+  body {
+    height: 100%;
+    height: 100dvh;
+  }
+
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto minmax(12rem, 1fr) minmax(12rem, 1fr) auto;
+    grid-template-rows: auto 1fr auto;
+    height: 100%;
+    min-height: 100dvh;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .mobile-bar {
+    display: flex;
+  }
+
+  .nav-back {
+    display: inline-flex;
+  }
+
+  .nav-back[hidden] {
+    display: none;
   }
 
   .rail,
-  .boxes {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    align-items: start;
-    gap: var(--space-md);
+  .boxes,
+  .list,
+  .read {
+    display: none;
+    border-right: 0;
+    min-height: 0;
   }
+
+  html[data-pane="accounts"] .rail,
+  .app[data-pane="accounts"] .rail {
+    display: flex;
+  }
+
+  html[data-pane="mailboxes"] .boxes,
+  .app[data-pane="mailboxes"] .boxes {
+    display: block;
+  }
+
+  html[data-pane="list"] .list,
+  .app[data-pane="list"] .list {
+    display: flex;
+  }
+
+  html[data-pane="read"] .read,
+  .app[data-pane="read"] .read {
+    display: flex;
+  }
+
+  .rail-foot {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .acc,
+  .box,
+  .msg,
+  .btn {
+    min-height: 2.75rem;
+  }
+
+  .status {
+    grid-column: 1;
+  }
+
+  .toast {
+    right: var(--space-md);
+    left: var(--space-md);
+    bottom: calc(var(--space-lg) + env(safe-area-inset-bottom));
+  }
+}
+
+html[data-shell="mobile"] .mobile-bar {
+  display: flex;
+}
+
+html[data-shell="mobile"] .nav-back {
+  display: inline-flex;
+}
+
+html[data-shell="mobile"] .nav-back[hidden] {
+  display: none;
+}
+
+html[data-shell="mobile"] .app {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  min-height: 100dvh;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+html[data-shell="mobile"] .rail,
+html[data-shell="mobile"] .boxes,
+html[data-shell="mobile"] .list,
+html[data-shell="mobile"] .read {
+  display: none;
+  border-right: 0;
+}
+
+html[data-shell="mobile"][data-pane="accounts"] .rail,
+html[data-shell="mobile"] .app[data-pane="accounts"] .rail {
+  display: flex;
+}
+
+html[data-shell="mobile"][data-pane="mailboxes"] .boxes,
+html[data-shell="mobile"] .app[data-pane="mailboxes"] .boxes {
+  display: block;
+}
+
+html[data-shell="mobile"][data-pane="list"] .list,
+html[data-shell="mobile"] .app[data-pane="list"] .list {
+  display: flex;
+}
+
+html[data-shell="mobile"][data-pane="read"] .read,
+html[data-shell="mobile"] .app[data-pane="read"] .read {
+  display: flex;
+}
+
+html[data-shell="mobile"] .acc,
+html[data-shell="mobile"] .box,
+html[data-shell="mobile"] .msg,
+html[data-shell="mobile"] .btn {
+  min-height: 2.75rem;
 }
 
 @media (prefers-reduced-motion: reduce) {

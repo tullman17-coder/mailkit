@@ -14,7 +14,7 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/v1/health` | liveness (no auth) |
+| GET | `/v1/pair` | pairing payload for the iOS/Android app (`mailkit.pair.v1`) |
 | GET | `/v1/status` | watchers, last event cursor |
 | GET/POST/DELETE | `/v1/accounts` `/v1/accounts/{id}` | accounts |
 | POST | `/v1/accounts/{id}/test` | IMAP login + folder list |
@@ -35,11 +35,11 @@ On failure `ok` is false and `error` matches `mailkit.error.v1`. Fields are addi
 | GET/POST/DELETE | `/v1/webhooks` | HTTP callbacks |
 | GET/POST/DELETE | `/v1/rules` | classification / routing |
 | GET | `/v1/plugins` | loaded plugin ids |
-| POST | `/v1/provider-hooks/graph` | Graph validation + notifications |
+| POST | `/v1/provider-hooks/graph` | Graph validation + notifications (no auth; Microsoft cannot send the daemon bearer) |
 
 ## Real-time
 
-- **SSE** `GET /v1/events/stream?...filters`: `id`, `event`, `data` fields. Last-Event-ID is the event id cursor.
+- **SSE** `GET /v1/events/stream?...filters`: `id`, `event`, `data` fields. Last-Event-ID is the event id cursor when the `cursor` query is omitted.
 - **WebSocket** `GET /v1/events/ws?token=`: text frames of `mailkit.event.v1`. Client may send `{"op":"subscribe","filter":{...}}`, `{"op":"ack","subscription_id":"...","event_id":"..."}`, `{"op":"ping"}`.
 - **Unix socket** `~/.mailkit/events.sock`: newline-delimited JSON events for local agents.
 - **CLI** `mailkit events stream` / `mailkit watch`: NDJSON on stdout.
@@ -60,3 +60,5 @@ Filter query params (also subscription `filter` objects): `account`, `mailbox`, 
 | 6 | daemon not running |
 | 7 | conflict |
 | 8 | rate limit |
+
+The CLI maps a live daemon's `error.code` onto these values (`not_found` → 3, `auth` → 4, `network` → 5, `daemon` → 6, `conflict` → 7, `rate_limit` → 8). When `error.code` is missing or generic, HTTP status is used: 401/403 → 4, 404 → 3, 409 → 7, 429 → 8, 5xx → 6. A local "service is not running" check still exits 6 without an HTTP round-trip.

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mailkit</string>
+    <string name="connect">Connect</string>
+    <string name="engine_hint">http://192.168.1.10:8765</string>
+    <string name="token_hint">Token from mailkit pair</string>
+    <string name="connect_copy">This phone is a client of the Mailkit engine on your computer. Run mailkit pair --lan on that machine, then paste the URL and token. AI agents use the same engine with mailkit -o json.</string>
+</resources>

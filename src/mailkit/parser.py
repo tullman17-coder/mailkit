@@ -153,16 +153,42 @@ def parse_rfc822(
     )
 
 
+_FLAGS_PAREN_RE = re.compile(r"\bFLAGS\s*\(([^)]*)\)", re.IGNORECASE)
+_FLAGS_KEYWORD_RE = re.compile(r"\bFLAGS\b", re.IGNORECASE)
+_FETCH_ATOM_RE = re.compile(
+    r"\b(?:UID|RFC822(?:\.\w+)?|INTERNALDATE|ENVELOPE|BODY(?:STRUCTURE|\.PEEK)?|"
+    r"MODSEQ|X-GM-\w+|BINARY(?:\.\w+)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _flag_tokens(text: str) -> list[str]:
+    return [t.lstrip("\\") for t in text.replace("(", " ").replace(")", " ").split() if t]
+
+
+def _parse_flags_text(text: str) -> list[str]:
+    """Keep only tokens from the IMAP FLAGS (...) group, not the rest of FETCH meta."""
+    grouped = _FLAGS_PAREN_RE.search(text)
+    if grouped:
+        return _flag_tokens(grouped.group(1))
+    keyword = _FLAGS_KEYWORD_RE.search(text)
+    if keyword:
+        rest = text[keyword.end() :]
+        stop = _FETCH_ATOM_RE.search(rest)
+        return _flag_tokens(rest if stop is None else rest[: stop.start()])
+    return _flag_tokens(text)
+
+
 def parse_flags(raw_flags: str | bytes | list | None) -> list[str]:
     if raw_flags is None:
         return []
     if isinstance(raw_flags, list):
-        tokens = []
+        chunks: list[str] = []
         for item in raw_flags:
             if isinstance(item, bytes):
                 item = item.decode("utf-8", errors="replace")
-            tokens.extend(str(item).replace("(", " ").replace(")", " ").split())
-        return [t.lstrip("\\") for t in tokens if t and t not in ("FLAGS",)]
+            chunks.append(str(item))
+        return _parse_flags_text(" ".join(chunks))
     if isinstance(raw_flags, bytes):
         raw_flags = raw_flags.decode("utf-8", errors="replace")
-    return [t.lstrip("\\") for t in str(raw_flags).replace("(", " ").replace(")", " ").split() if t]
+    return _parse_flags_text(str(raw_flags))

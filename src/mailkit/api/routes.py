@@ -11,12 +11,25 @@ from mailkit.api.http import App, Response, json_response
 from mailkit.compose import build_message, reply_subject
 from dataclasses import fields
 
-from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, save_config
+from mailkit.config import AccountConfig, FolderSettings, ImapSettings, SmtpSettings, OAuthSettings, infer_provider_id, save_config
 from mailkit.discovery import discover
-from mailkit.errors import NotFoundError, UsageError
-from mailkit.ids import new_id
-from mailkit.models import EventFilter, Mailbox, fail, ok, utcnow
+from mailkit.errors import NetworkError, NotFoundError, UsageError
+from mailkit.folders import mailbox_for_role, resolve_mailbox_name, resolve_saved_view, section_role
+from mailkit.ids import idempotency_key, new_id
+from mailkit.logutil import get_logger
+from mailkit.models import (
+    FLAG_MUTATION_EVENTS,
+    Event,
+    EventFilter,
+    Mailbox,
+    apply_flag_mutation,
+    fail,
+    ok,
+    utcnow,
+)
 from mailkit.rules import Rule, RulesEngine, event_filter_match
+
+log = get_logger("mailkit.api")
 
 
 def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) -> Any:
@@ -31,6 +44,10 @@ def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) ->
         return ok({"status": "ok", "ts": utcnow()})
     if method == "GET" and rest == ["status"]:
         return ok(_status(app))
+    if method == "GET" and rest == ["pair"]:
+        from mailkit.pair import build_pair_payload
+
+        return ok(build_pair_payload(app.runtime.root, token=app.token))
     if rest[:1] == ["doctor"]:
         return _doctor(app, method, rest[1:], qs, body)
     if rest[:1] == ["accounts"]:
@@ -56,11 +73,13 @@ def dispatch(app: App, method: str, path: str, qs: dict, body: dict, handler) ->
     if rest[:1] == ["discover"] and method in {"GET", "POST"}:
         address = body.get("address") or (qs.get("address") or [""])[0]
         return ok(discover(address).to_dict())
-    if rest == ["provider-hooks", "graph"] and method == "POST":
-        # Graph validationToken handshake + notifications.
+    if rest == ["provider-hooks", "graph"] and method in {"GET", "POST"}:
+        # Graph POSTs (sometimes GET) validationToken with no bearer, then notifications.
         token = (qs.get("validationToken") or [None])[0]
         if token:
-            return Response(status=200, body=token.encode(), headers={"Content-Type": "text/plain"})
+            return Response(status=200, body=token.encode("utf-8"), headers={"Content-Type": "text/plain"})
+        if method != "POST":
+            raise UsageError("Graph handshake requires validationToken")
         for note in body.get("value") or []:
             app.bus.publish(
                 __import__("mailkit.models", fromlist=["Event"]).Event(
@@ -175,7 +194,14 @@ def _account_from_body(body: dict) -> AccountConfig:
         graph_notify_url=oauth_body.get("graph_notify_url") or "",
     )
     folders = FolderSettings(**(body.get("folders") or {}))
-    provider = body.get("provider") or (discovered.provider_id if discovered else "imap")
+    requested = body.get("provider") or ""
+    discovered_id = discovered.provider_id if discovered else None
+    provider = infer_provider_id(
+        address,
+        imap.host,
+        explicit=requested,
+        discovered_id=discovered_id,
+    )
     auth = body.get("auth") or (discovered.auth_hint if discovered else "password")
     return AccountConfig(
         id=acc_id,
@@ -217,20 +243,35 @@ def _qbool(qs, name):
     return raw.lower() in {"1", "true", "yes"}
 
 
+def _payload_has_body(payload: dict | None) -> bool:
+    if not payload:
+        return False
+    return bool(payload.get("body_text") or payload.get("body_html"))
+
+
+def _needs_live_body(stored: dict | None, qs: dict) -> bool:
+    if _qbool(qs, "body") is True:
+        return True
+    return not _payload_has_body(stored)
+
+
 def _messages(app: App, method: str, rest: list[str], qs: dict, body: dict):
     if rest and rest[0] == "search" and method in {"GET", "POST"}:
         params = {**{k: v[0] if v else "" for k, v in qs.items()}, **body}
         return _list_messages(app, params)
     if rest and method == "GET" and rest[0] not in {"search"}:
-        msg = app.runtime.store.get_message(rest[0])
-        if msg:
-            return ok(msg)
-        # live fetch
-        account_id = (qs.get("account") or [None])[0]
-        mailbox = (qs.get("mailbox") or ["INBOX"])[0]
+        stored = app.runtime.store.get_message(rest[0])
+        if not _needs_live_body(stored, qs):
+            return ok(stored)
+        account_id = (stored or {}).get("account_id") or (qs.get("account") or [None])[0]
+        mailbox = (stored or {}).get("mailbox") or (qs.get("mailbox") or ["INBOX"])[0]
+        native = (stored or {}).get("native_id") or (stored or {}).get("uid") or rest[0]
         acc = app.runtime.config.require_account(account_id)
         provider, _, _ = app.runtime.provider_for(acc.id)
-        fetched = provider.get_message(mailbox, rest[0], peek=True)
+        fetched = provider.get_message(mailbox, str(native), peek=True)
+        if stored and not fetched.tags:
+            fetched.tags = stored.get("tags") or []
+        app.runtime.store.upsert_message(fetched)
         return ok(fetched.to_dict())
     if rest and method == "POST" and len(rest) >= 2:
         msg_id = rest[0]
@@ -262,17 +303,18 @@ def _list_messages(app: App, params: dict):
         )
         return ok(rows)
     acc = app.runtime.config.require_account(account_id)
-    # Resolve section names like inbox/saved/sent
+    # Resolve section names like inbox/saved/sent via SPECIAL-USE role
     provider, account, _ = app.runtime.provider_for(acc.id)
     boxes = provider.list_mailboxes()
     folder = mailbox
-    if mailbox.lower() in {"inbox", "saved", "sent", "drafts", "archives", "trash", "junk"}:
-        role = mailbox.lower()
-        match = next((b for b in boxes if getattr(b, "role", "") == role), None)
-        if role == "saved" and (not match or match.name.upper() == "INBOX"):
-            folder = match.name if match else "INBOX"
+    role = section_role(mailbox)
+    if role == "saved":
+        folder, apply_flagged = resolve_saved_view(boxes)
+        if apply_flagged:
             params["flagged"] = "true"
-        elif match:
+    elif role:
+        match = mailbox_for_role(boxes, role)
+        if match:
             folder = match.name
     live = str(params.get("live") or "true").lower() != "false"
     if live:
@@ -316,6 +358,15 @@ def _truth(value) -> bool | None:
     return str(value).lower() in {"1", "true", "yes"}
 
 
+def _require_native_id(native, msg_id: str) -> str:
+    if native is None:
+        raise NotFoundError(f"Message {msg_id} has no IMAP UID")
+    uid = str(native).strip()
+    if not uid or uid.lower() in {"none", "null"}:
+        raise NotFoundError(f"Message {msg_id} has no IMAP UID")
+    return uid
+
+
 def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
     stored = app.runtime.store.get_message(msg_id)
     account_id = (stored or {}).get("account_id") or (qs.get("account") or [None])[0]
@@ -327,6 +378,8 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
         dest = body.get("mailbox") or body.get("dest")
         if not dest:
             raise UsageError("move requires mailbox")
+        boxes = provider.list_mailboxes()
+        dest = resolve_mailbox_name(boxes, dest)
         provider.move(mailbox, str(native), dest)
         if stored:
             stored["mailbox"] = dest
@@ -337,6 +390,7 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
             app.runtime.store.conn.commit()
         return ok({"moved": msg_id, "mailbox": dest, "account_id": acc.id})
     if action in {"flag", "unflag", "read", "unread"}:
+        uid = _require_native_id(native, msg_id)
         add, remove = [], []
         if action == "flag":
             add = ["Flagged"]
@@ -346,7 +400,45 @@ def _mutate_message(app: App, msg_id: str, action: str, body: dict, qs: dict):
             add = ["Seen"]
         else:
             remove = ["Seen"]
-        provider.set_flags(mailbox, str(native), add=add, remove=remove)
+        provider.set_flags(mailbox, uid, add=add, remove=remove)
+        if stored:
+            patch = getattr(app.runtime.store, "patch_message_flags", None)
+            if callable(patch):
+                patch(msg_id, add=add, remove=remove)
+        event_type = FLAG_MUTATION_EVENTS[action]
+        snapshot = apply_flag_mutation(
+            stored
+            or {
+                "id": msg_id,
+                "account_id": acc.id,
+                "provider_id": acc.provider,
+                "mailbox": mailbox,
+                "native_id": uid,
+                "flags": [],
+            },
+            action,
+        )
+        bus = getattr(app, "bus", None)
+        if bus is not None:
+            bus.publish(
+                Event(
+                    id=new_id("evt"),
+                    ts=utcnow(),
+                    account_id=acc.id,
+                    provider_id=acc.provider,
+                    mailbox=mailbox,
+                    type=event_type,
+                    thread_id=snapshot.get("thread_id") or "",
+                    message=snapshot,
+                    data={"action": action},
+                    idempotency_key=idempotency_key(
+                        acc.id,
+                        mailbox,
+                        event_type,
+                        uid,
+                    ),
+                )
+            )
         return ok({"id": msg_id, "action": action})
     if action == "tag":
         tags = body.get("tags") or body.get("tag") or []
@@ -413,10 +505,16 @@ def _reply(app: App, body: dict):
     mid = provider.send(acc.address, to, msg.as_bytes())
     native = stored.get("native_id") or stored.get("uid")
     if native:
+        mailbox = stored.get("mailbox") or "INBOX"
         try:
-            provider.set_flags(stored.get("mailbox") or "INBOX", str(native), add=["Answered"])
-        except Exception:
-            pass
+            provider.set_flags(mailbox, str(native), add=["Answered"])
+        except Exception as exc:
+            log.exception("IMAP STORE Answered failed for %s", msg_id)
+            raise NetworkError(
+                f"IMAP STORE Answered failed after reply: {exc}",
+                details={"message_id": mid, "id": msg_id},
+            ) from exc
+        app.runtime.store.patch_message_flags(msg_id, add=["Answered"])
     return ok({"message_id": mid, "in_reply_to": stored.get("message_id")})
 
 
@@ -424,9 +522,12 @@ def _events(app: App, method: str, rest: list[str], qs: dict, body: dict, handle
     if rest == ["stream"] and method == "GET":
         filt = EventFilter.from_dict({k: v[0] if len(v) == 1 else v for k, v in qs.items() if k not in {"token", "cursor"}})
         cursor = (qs.get("cursor") or [None])[0]
+        if not cursor and handler is not None:
+            cursor = handler.headers.get("Last-Event-ID") or None
         stop = threading.Event()
 
         def stream(wfile):
+            # bus.stream subscribes live before replay (WebSocket-safe order).
             for ev in app.bus.stream(filt, cursor, stop):
                 chunk = f"id: {ev.get('id')}\nevent: {ev.get('type')}\ndata: {json.dumps(ev)}\n\n"
                 wfile.write(chunk.encode("utf-8"))
@@ -439,6 +540,7 @@ def _events(app: App, method: str, rest: list[str], qs: dict, body: dict, handle
         if not sub or not event_id:
             raise UsageError("subscription_id and event_id required")
         app.runtime.store.ack(sub, event_id, "acked")
+        app.runtime.store.advance_cursor(sub, event_id)
         return ok({"acked": event_id})
     if method == "GET" and not rest:
         filt = EventFilter.from_dict({k: v[0] if len(v) == 1 else v for k, v in qs.items() if k not in {"token", "cursor", "limit"}})

@@ -1,13 +1,14 @@
-"""SQLite index for messages, events, subscriptions, cursors, and rules."""
+"""SQLite index for messages, events, subscriptions, webhooks, cursors, and rules."""
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterator
 
-from mailkit.models import Event, EventFilter, Message, utcnow
+from mailkit.models import Event, EventFilter, Message, apply_system_flags, utcnow
 from mailkit.paths import db_path
 
 SCHEMA = """
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS messages (
   unread INTEGER,
   flagged INTEGER,
   draft INTEGER,
+  answered INTEGER,
   has_attachments INTEGER,
   attachment_types_json TEXT,
   snippet TEXT,
@@ -87,6 +89,19 @@ CREATE TABLE IF NOT EXISTS webhooks (
   created_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  webhook_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  last_error TEXT,
+  next_retry TEXT,
+  updated_at TEXT,
+  PRIMARY KEY (webhook_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status, next_retry);
+
 CREATE TABLE IF NOT EXISTS cursors (
   account_id TEXT NOT NULL,
   mailbox TEXT NOT NULL,
@@ -112,6 +127,20 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+def _canonical_flag(flag: str) -> str:
+    token = str(flag).lstrip("\\")
+    known = {"Seen", "Flagged", "Deleted", "Draft", "Answered", "Recent"}
+    capped = token.capitalize()
+    return capped if capped in known else token
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
+    if "answered" not in cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN answered INTEGER")
+        conn.commit()
+
+
 def connect(root: Path | None = None) -> sqlite3.Connection:
     path = db_path(root)
     conn = sqlite3.connect(path, check_same_thread=False)
@@ -119,12 +148,14 @@ def connect(root: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
+    _ensure_columns(conn)
     return conn
 
 
 class Store:
     def __init__(self, root: Path | None = None):
         self.conn = connect(root)
+        self._lock = threading.Lock()
 
     def close(self) -> None:
         self.conn.close()
@@ -137,13 +168,14 @@ class Store:
             INSERT INTO messages (
               id, account_id, provider_id, mailbox, uid, uidvalidity, native_id,
               message_id, thread_id, date, subject, from_json, to_json, cc_json,
-              flags_json, labels_json, tags_json, unread, flagged, draft,
+              flags_json, labels_json, tags_json, unread, flagged, draft, answered,
               has_attachments, attachment_types_json, snippet, size, payload_json, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               mailbox=excluded.mailbox, uid=excluded.uid, flags_json=excluded.flags_json,
               labels_json=excluded.labels_json, tags_json=excluded.tags_json,
               unread=excluded.unread, flagged=excluded.flagged, draft=excluded.draft,
+              answered=excluded.answered,
               snippet=excluded.snippet, payload_json=excluded.payload_json, updated_at=excluded.updated_at
             """,
             (
@@ -167,6 +199,7 @@ class Store:
                 int(message.unread),
                 int(message.flagged),
                 int(message.draft),
+                int(message.answered),
                 int(message.has_attachments),
                 json.dumps(message.attachment_types),
                 message.snippet,
@@ -179,6 +212,19 @@ class Store:
 
     def get_message(self, message_id: str) -> dict | None:
         row = self.conn.execute("SELECT payload_json, tags_json FROM messages WHERE id=?", (message_id,)).fetchone()
+        if not row:
+            return None
+        data = json.loads(row["payload_json"])
+        data["tags"] = json.loads(row["tags_json"] or "[]")
+        return data
+
+    def find_by_native(self, account_id: str, native_id: str, mailbox: str | None = None) -> dict | None:
+        sql = "SELECT payload_json, tags_json FROM messages WHERE account_id=? AND native_id=?"
+        args: list[Any] = [account_id, native_id]
+        if mailbox:
+            sql += " AND mailbox=?"
+            args.append(mailbox)
+        row = self.conn.execute(sql, args).fetchone()
         if not row:
             return None
         data = json.loads(row["payload_json"])
@@ -201,6 +247,37 @@ class Store:
         )
         self.conn.commit()
         return row
+
+    def patch_message_flags(
+        self,
+        message_id: str,
+        *,
+        add: list[str] | None = None,
+        remove: list[str] | None = None,
+    ) -> dict | None:
+        """Patch cached flags including answered after a successful IMAP STORE."""
+        row = self.get_message(message_id)
+        if not row:
+            return None
+        updated = apply_system_flags(row, add=add, remove=remove)
+        self.conn.execute(
+            """
+            UPDATE messages SET flagged=?, unread=?, draft=?, answered=?, flags_json=?, payload_json=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                int(bool(updated.get("flagged"))),
+                int(bool(updated.get("unread"))),
+                int(bool(updated.get("draft"))),
+                int(bool(updated.get("answered"))),
+                json.dumps(updated["flags"]),
+                json.dumps(updated),
+                utcnow(),
+                message_id,
+            ),
+        )
+        self.conn.commit()
+        return updated
 
     def list_messages(
         self,
@@ -352,6 +429,25 @@ class Store:
         self.conn.execute("UPDATE subscriptions SET cursor=? WHERE id=?", (cursor, sub_id))
         self.conn.commit()
 
+    def _event_rowid(self, event_id: str | None) -> int | None:
+        if not event_id:
+            return None
+        row = self.conn.execute("SELECT rowid FROM events WHERE id=?", (event_id,)).fetchone()
+        return int(row["rowid"]) if row else None
+
+    def advance_cursor(self, sub_id: str, event_id: str) -> None:
+        """Persist last_acked on the subscription when event_id is newer than the stored cursor."""
+        new_rowid = self._event_rowid(event_id)
+        if new_rowid is None:
+            return
+        sub = self.get_subscription(sub_id)
+        if not sub:
+            return
+        current_rowid = self._event_rowid(sub.get("cursor"))
+        if current_rowid is not None and new_rowid <= current_rowid:
+            return
+        self.set_cursor(sub_id, event_id)
+
     def ack(self, sub_id: str, event_id: str, status: str = "acked", error: str | None = None) -> None:
         self.conn.execute(
             """
@@ -366,6 +462,8 @@ class Store:
             (sub_id, event_id, status, 1 if status != "acked" else 0, error, utcnow()),
         )
         self.conn.commit()
+        if status == "acked":
+            self.advance_cursor(sub_id, event_id)
 
     def pending_acks(self, sub_id: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
@@ -381,22 +479,97 @@ class Store:
 
     # --- webhooks ---
     def save_webhook(self, hook_id: str, name: str, url: str, filt: EventFilter, enabled: bool = True) -> None:
-        self.conn.execute(
-            """
-            INSERT INTO webhooks (id, name, url, filter_json, enabled, created_at)
-            VALUES (?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET name=excluded.name, url=excluded.url, filter_json=excluded.filter_json, enabled=excluded.enabled
-            """,
-            (hook_id, name, url, json.dumps(filt.to_dict()), int(enabled), utcnow()),
-        )
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO webhooks (id, name, url, filter_json, enabled, created_at)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name, url=excluded.url, filter_json=excluded.filter_json, enabled=excluded.enabled
+                """,
+                (hook_id, name, url, json.dumps(filt.to_dict()), int(enabled), utcnow()),
+            )
+            self.conn.commit()
 
     def list_webhooks(self) -> list[dict]:
-        return [dict(r) for r in self.conn.execute("SELECT * FROM webhooks").fetchall()]
+        with self._lock:
+            return [dict(r) for r in self.conn.execute("SELECT * FROM webhooks ORDER BY rowid").fetchall()]
+
+    def get_webhook(self, hook_id: str) -> dict | None:
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM webhooks WHERE id=?", (hook_id,)).fetchone()
+        return dict(row) if row else None
 
     def delete_webhook(self, hook_id: str) -> None:
-        self.conn.execute("DELETE FROM webhooks WHERE id=?", (hook_id,))
-        self.conn.commit()
+        with self._lock:
+            self.conn.execute("DELETE FROM webhook_deliveries WHERE webhook_id=?", (hook_id,))
+            self.conn.execute("DELETE FROM webhooks WHERE id=?", (hook_id,))
+            self.conn.commit()
+
+    def upsert_webhook_delivery(
+        self,
+        webhook_id: str,
+        event: dict,
+        *,
+        attempts: int,
+        status: str,
+        next_retry: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        event_id = event.get("id") or ""
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT INTO webhook_deliveries (
+                  webhook_id, event_id, payload_json, attempts, status, last_error, next_retry, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(webhook_id, event_id) DO UPDATE SET
+                  payload_json=excluded.payload_json,
+                  attempts=excluded.attempts,
+                  status=excluded.status,
+                  last_error=excluded.last_error,
+                  next_retry=excluded.next_retry,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    webhook_id,
+                    event_id,
+                    json.dumps(event),
+                    attempts,
+                    status,
+                    error,
+                    next_retry,
+                    utcnow(),
+                ),
+            )
+            self.conn.commit()
+
+    def mark_webhook_delivered(self, webhook_id: str, event_id: str) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                UPDATE webhook_deliveries
+                SET status='delivered', last_error=NULL, next_retry=NULL, updated_at=?
+                WHERE webhook_id=? AND event_id=?
+                """,
+                (utcnow(), webhook_id, event_id),
+            )
+            self.conn.commit()
+
+    def pending_webhook_deliveries(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM webhook_deliveries
+                WHERE status='pending'
+                ORDER BY next_retry, updated_at
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_webhook_deliveries(self) -> list[dict]:
+        with self._lock:
+            rows = self.conn.execute("SELECT * FROM webhook_deliveries ORDER BY updated_at").fetchall()
+        return [dict(r) for r in rows]
 
     # --- cursors / rules ---
     def get_sync_cursor(self, account_id: str, mailbox: str, kind: str) -> str | None:

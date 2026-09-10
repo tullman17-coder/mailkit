@@ -9,12 +9,19 @@ from typing import Any
 from mailkit.backoff import Backoff
 from mailkit.config import AccountConfig
 from mailkit.events import EventBus
-from mailkit.ids import new_id
+from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
 from mailkit.plugins.types import HookAction, HookContext
-from mailkit.rules import RulesEngine, RulesHook
+from mailkit.rules import (
+    RulesEngine,
+    RulesHook,
+    apply_imap_flags,
+    flag_event_types,
+    persist_imap_flags,
+)
 from mailkit.runtime import Runtime
+from mailkit.watchers.gmail_push import load_gmail_created_message
 
 log = get_logger("mailkit.supervisor")
 
@@ -26,8 +33,8 @@ def choose_watcher(account: AccountConfig, provider: Any, plugins) -> Any:
         watcher = plugins.watcher_for(requested)
         if watcher and watcher.supports(account, provider):
             return watcher
-    # Preference order: native push, IDLE, poll.
-    for name in ("gmail_push", "graph_push", "idle", "poll"):
+    # Preference order: local demo, native push, IDLE, poll.
+    for name in ("local", "gmail_push", "graph_push", "idle", "poll"):
         if requested == "auto" or requested == name:
             watcher = plugins.watcher_for(name)
             if not watcher:
@@ -37,6 +44,8 @@ def choose_watcher(account: AccountConfig, provider: Any, plugins) -> Any:
                 if not (name == "gmail_push" and getattr(provider, "id", "") == "gmail" and provider.secrets.get("access_token")):
                     continue
             if name == "graph_push" and getattr(provider, "id", "") != "graph":
+                continue
+            if name == "idle" and "idle" not in caps:
                 continue
             if watcher.supports(account, provider):
                 return watcher
@@ -55,27 +64,47 @@ class AccountWorker:
         self.watcher_id = ""
         self.restarts = 0
         self.last_start = 0.0
+        self._provider = None
 
     def start(self) -> None:
         self.stop.clear()
+        self.status = "connecting"
+        self.last_start = time.time()
         self.thread = threading.Thread(target=self._run, name=f"mailkit-{self.account.id}", daemon=True)
         self.thread.start()
 
     def join(self, timeout: float | None = None) -> None:
         self.stop.set()
+        provider = self._provider
+        if provider is not None:
+            try:
+                provider.close()
+            except Exception:
+                pass
         if self.thread:
             self.thread.join(timeout=timeout)
 
     def alive(self) -> bool:
-        return bool(self.thread and self.thread.is_alive() and self.status in {"running", "reconnecting"})
+        # A worker is live as soon as its thread exists, including the IMAP
+        # connect window when status is still "connecting"/"stopped".
+        return bool(self.thread and self.thread.is_alive())
 
     def _run(self) -> None:
         backoff = Backoff(initial=1.0, maximum=120.0)
         while not self.stop.is_set():
             provider = None
+            self.status = "connecting"
             self.last_start = time.time()
             try:
                 provider, acc, _secrets = self.runtime.provider_for(self.account.id)
+                self._provider = provider
+                setter = getattr(provider, "set_stop", None)
+                if callable(setter):
+                    setter(self.stop)
+                if self.stop.is_set():
+                    break
+                if hasattr(provider, "connect"):
+                    provider.connect()
                 watcher = choose_watcher(acc, provider, self.runtime.plugins)
                 if watcher is None:
                     raise RuntimeError("no watcher plugin available")
@@ -85,9 +114,13 @@ class AccountWorker:
                 log.info("watch account=%s provider=%s watcher=%s", acc.id, provider.id, self.watcher_id)
 
                 def emit(event: Event, prov=provider) -> None:
+                    extras: list[Event] = []
+                    self._prepare_created_event(prov, event)
                     if event.type == "message.created" and event.message:
-                        self._apply_hooks(prov, event)
+                        extras = self._apply_hooks(prov, event) or []
                     published = self.bus.publish(event)
+                    for extra in extras:
+                        self.bus.publish(extra)
                     if published and event.type == "message.created":
                         log.info("event %s account=%s mailbox=%s", event.type, event.account_id, event.mailbox)
 
@@ -119,12 +152,27 @@ class AccountWorker:
                         provider.close()
                     except Exception:
                         pass
+                if self._provider is provider:
+                    self._provider = None
             if not self.stop.is_set():
                 self.status = "reconnecting"
                 self.stop.wait(backoff.fail())
         self.status = "stopped"
 
-    def _apply_hooks(self, provider, event: Event) -> None:
+    def _prepare_created_event(self, provider, event: Event) -> None:
+        if event.type != "message.created" or event.message:
+            return
+        gmail_id = (event.data or {}).get("gmail_id")
+        if not gmail_id:
+            return
+        msg = load_gmail_created_message(provider, event.mailbox, gmail_id)
+        if msg is None:
+            return
+        event.message = msg.summary()
+        if not event.thread_id:
+            event.thread_id = msg.thread_id
+
+    def _apply_hooks(self, provider, event: Event) -> list[Event]:
         payload = event.message or {}
         # Reconstruct a Message-like object from summary for matching.
         msg = _message_from_summary(payload)
@@ -153,32 +201,38 @@ class AccountWorker:
                     break
         native = payload.get("native_id") or payload.get("uid")
         mailbox = event.mailbox
+        extras: list[Event] = []
+        if action.extra.get("matched_rules"):
+            event.data.setdefault("matched_rules", action.extra.get("matched_rules", []))
         if action.tag and payload.get("id"):
-            current = list(payload.get("tags") or [])
+            current = list((event.message or payload).get("tags") or payload.get("tags") or [])
             updated = self.runtime.store.set_tags(payload["id"], current + action.tag)
             if updated:
-                event.message = {**payload, "tags": updated.get("tags") or []}
-                event.data.setdefault("matched_rules", action.extra.get("matched_rules", []))
+                event.message = {**(event.message or payload), "tags": updated.get("tags") or []}
         if action.flag is True and native:
             try:
                 provider.set_flags(mailbox, str(native), add=["Flagged"])
+                extras.extend(self._sync_flags_after_store(event, add=["Flagged"]))
             except Exception as exc:
                 log.warning("flag failed: %s", exc)
         if action.flag is False and native:
             try:
                 provider.set_flags(mailbox, str(native), remove=["Flagged"])
+                extras.extend(self._sync_flags_after_store(event, remove=["Flagged"]))
             except Exception as exc:
                 log.warning("unflag failed: %s", exc)
         if action.mark_read is True and native:
             try:
                 provider.set_flags(mailbox, str(native), add=["Seen"])
-            except Exception:
-                pass
+                extras.extend(self._sync_flags_after_store(event, add=["Seen"]))
+            except Exception as exc:
+                log.warning("mark-read failed: %s", exc)
         if action.mark_read is False and native:
             try:
                 provider.set_flags(mailbox, str(native), remove=["Seen"])
-            except Exception:
-                pass
+                extras.extend(self._sync_flags_after_store(event, remove=["Seen"]))
+            except Exception as exc:
+                log.warning("mark-unread failed: %s", exc)
         if action.move and native:
             try:
                 provider.move(mailbox, str(native), action.move)
@@ -186,6 +240,44 @@ class AccountWorker:
                 event.data["moved_to"] = action.move
             except Exception as exc:
                 log.warning("rule move failed: %s", exc)
+        # Follow-up events carry the post-STORE snapshot (flag + read may both apply).
+        for extra in extras:
+            extra.message = event.message
+        return extras
+
+    def _sync_flags_after_store(self, event: Event, *, add: list[str] | None = None, remove: list[str] | None = None) -> list[Event]:
+        payload = event.message or {}
+        updated = apply_imap_flags(payload, add=add, remove=remove)
+        event.message = updated
+        msg_id = updated.get("id")
+        if msg_id:
+            persisted = persist_imap_flags(self.runtime.store, msg_id, add=add, remove=remove)
+            if persisted:
+                event.message = {
+                    **updated,
+                    "flags": persisted.get("flags") or updated["flags"],
+                    "flagged": persisted.get("flagged"),
+                    "unread": persisted.get("unread"),
+                    "tags": persisted.get("tags") if persisted.get("tags") is not None else updated.get("tags"),
+                }
+        native = str((event.message or {}).get("native_id") or (event.message or {}).get("uid") or "")
+        extras: list[Event] = []
+        for etype in flag_event_types(add=add, remove=remove):
+            extras.append(
+                Event(
+                    id=new_id("evt"),
+                    ts=utcnow(),
+                    account_id=event.account_id,
+                    provider_id=event.provider_id,
+                    mailbox=event.mailbox,
+                    type=etype,
+                    thread_id=event.thread_id,
+                    message=event.message,
+                    data={"matched_rules": event.data.get("matched_rules", [])},
+                    idempotency_key=idempotency_key(event.account_id, event.mailbox, etype, native),
+                )
+            )
+        return extras
 
 
 class Supervisor:
@@ -209,9 +301,23 @@ class Supervisor:
     def stop_account(self, account_id: str) -> None:
         worker = self.workers.pop(account_id, None)
         if worker:
-            worker.join(timeout=5)
+            # IMAP connect can take the full account timeout (default 30s) and
+            # used to outlive a 5s join, so start_account spawned a duplicate.
+            worker.join()
+
+    def request_stop(self) -> None:
+        """Abort in-flight connect/IDLE so join() does not wait on a 30s handshake."""
+        for worker in self.workers.values():
+            worker.stop.set()
+            provider = getattr(worker, "_provider", None)
+            if provider is not None:
+                try:
+                    provider.close()
+                except Exception:
+                    pass
 
     def stop_all(self) -> None:
+        self.request_stop()
         for account_id in list(self.workers):
             self.stop_account(account_id)
 

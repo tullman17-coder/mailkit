@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mailkit"
 version = "0.1.1"
-description = "Local, cross-platform email engine, daemon, and CLI for multiple accounts."
+description = "Native desktop and mobile email app with a local engine and CLI for AI agents."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

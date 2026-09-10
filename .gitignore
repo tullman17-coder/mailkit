@@ -17,3 +17,7 @@ venv/
 dist-dmg/
 *.dmg
 *.spec.bak
+clients/android/.gradle/
+clients/android/app/build/
+clients/ios/*.xcodeproj/
+clients/ios/*.xcworkspace/

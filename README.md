@@ -4,7 +4,7 @@
   <img src="desktop/brand/icon-1024.png" width="180" alt="Mailkit — two T-rexes holding a sealed envelope">
 </p>
 
-<p align="center">Local email engine · CLI · desktop · an entity of <a href="https://zermo.org">zermo.org</a></p>
+<p align="center">Native desktop · iOS · Android · CLI for agents · an entity of <a href="https://zermo.org">zermo.org</a></p>
 
 <p align="center">
   <a href="https://github.com/tullman17-coder/mailkit/releases/latest"><strong>Download latest release</strong></a>
@@ -16,19 +16,17 @@
 
 Mailkit talks **directly** to your existing Gmail, Outlook / Microsoft 365, Yahoo, and custom-domain IMAP/SMTP accounts. It does not host, proxy, or relay mail through a third party. Credentials stay in an encrypted vault on disk.
 
-Mailkit talks **directly** to your existing Gmail, Outlook / Microsoft 365, Yahoo, and custom-domain IMAP/SMTP accounts. It does not host, proxy, or relay mail through a third party. Credentials stay in an encrypted vault on disk.
-
-The product is:
+The product is a **native desktop app**, **native iOS and Android apps**, and a **CLI** so AI agents can use the same engine:
 
 1. A long-running background **daemon** that keeps a live connection to every account
-2. A **CLI** with JSON/NDJSON output and stable exit codes
+2. A **CLI** with JSON/NDJSON output and stable exit codes (the agent surface)
 3. A versioned local **HTTP / SSE / WebSocket** API
 4. A durable **event log** so agents can subscribe, ack, and resume
 5. A **plugin** layer for providers, auth, watchers, and classification hooks
 6. A **doctor** engine that diagnoses local damage and applies safe repairs in a loop
-7. A **desktop window** that is only a client of that API (no mail logic in the UI)
+7. Native **desktop and mobile windows** that are only clients of that API (no mail logic in the UI)
 
-A graphical desktop app is a replaceable client. The engine remains the product.
+The engine stays on your computer. Phones pair to it. Agents call `mailkit -o json`, not the GUI.
 
 ## Quick start
 
@@ -43,6 +41,8 @@ mailkit events stream --account you --format ndjson
 mailkit doctor --repair
 pip install -e ".[desktop]"
 mailkit desktop
+mailkit pair --lan
+mailkit -o json messages list --mailbox inbox
 ```
 
 App passwords work anywhere OAuth is unavailable:
@@ -104,7 +104,8 @@ Navigation is explicit: **account → mailbox → message**. `--unified` is opt-
 | `mailkit rules add` | Classification / routing |
 | `mailkit plugins` / `mailkit schema` | Introspection |
 | `mailkit doctor` / `mailkit doctor watchdog` | Diagnose, repair, keep the daemon alive |
-| `mailkit desktop` | Open the local window (starts the engine if needed) |
+| `mailkit desktop` | Native desktop window (starts the engine if needed) |
+| `mailkit pair [--lan\|--off]` | Pair the iOS/Android app (or an agent) to this engine |
 
 Global flags: `-o json|ndjson|text`, `--account`, `--unified`, `--home`.
 
@@ -156,7 +157,17 @@ mailkit service install --target systemd   # Linux user unit
 mailkit service install --target launchd   # macOS
 ```
 
-The engine is ordinary Python. It runs on macOS, Linux, or a server. There is no macOS-only core.
+The engine is ordinary Python. It runs on macOS, Linux, or a server. Native iOS and Android apps in `clients/` talk to that engine over the LAN.
+
+## Native apps
+
+```bash
+pip install -e ".[desktop]"
+mailkit desktop                 # native window, not a browser tab
+mailkit pair --lan              # phone: open the mailkit:// link or paste URL + token
+```
+
+iOS: `clients/ios`. Android: `clients/android`. Both load the same workbench as the desktop window with `?shell=mobile`. See [clients/README.md](clients/README.md) and [docs/AGENTS.md](docs/AGENTS.md).
 
 ## Develop
 
@@ -167,7 +178,7 @@ make test
 
 Tests cover IMAP folder mapping, RFC 822 parsing, classification, discovery, the durable event log, and CLI help/schema contracts.
 
-## Desktop and macOS disk image
+## Desktop, phone, and macOS disk image
 
 The window is a Hallmark workbench: account rail, mailbox, message list, reading pane. Navigation is always account → mailbox → message. The mark is two T-rexes holding a sealed envelope on burgundy.
 
@@ -204,6 +215,8 @@ Release (DMG): [github.com/tullman17-coder/mailkit/releases/latest](https://gith
 ## Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Agents (CLI)](docs/AGENTS.md)
+- [Native clients](clients/README.md)
 - [Configuration](docs/CONFIG.md)
 - [API](docs/API.md)
 - [Events](docs/EVENTS.md)

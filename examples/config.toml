@@ -7,7 +7,7 @@ port = 8765
 log_level = "info"
 json_logs = false
 event_retention = 100000
-allow_remote = false
+allow_remote = false   # set true via `mailkit pair --lan` for phones on this Wi-Fi
 doctor_interval = 60
 doctor_repair = true
 

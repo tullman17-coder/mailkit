@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import mimetypes
 import socket
 import ssl
 import threading
 import time
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from mailkit.events import EventBus
 from mailkit.logutil import get_logger
@@ -19,10 +19,22 @@ from mailkit.models import EventFilter, fail, ok
 from mailkit.runtime import Runtime
 from mailkit.supervisor import Supervisor
 from mailkit.webhooks import WebhookDispatcher
+from mailkit.watchers.graph_push import GRAPH_HOOK_PATH
 
 log = get_logger("mailkit.api")
 
 WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+UI_ROOT_PATHS = {"/", "/index.html", "/favicon.ico"}
+UI_PREFIXES = ("/css/", "/js/", "/brand/")
+
+# Desktop loads index.html as a file:// URI and fetches this API with
+# Authorization. Browsers require these headers on the actual GET/POST/SSE
+# response, not only on the OPTIONS preflight.
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Authorization, Content-Type",
+    "Access-Control-Allow-Methods": "GET,POST,DELETE,PATCH,OPTIONS",
+}
 
 
 @dataclass
@@ -83,22 +95,30 @@ class Handler(BaseHTTPRequestHandler):
     def do_PATCH(self):  # noqa: N802
         self._dispatch()
 
+    def _send_cors_headers(self) -> None:
+        for name, value in CORS_HEADERS.items():
+            self.send_header(name, value)
+
     def do_OPTIONS(self):  # noqa: N802
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,PATCH,OPTIONS")
+        self._send_cors_headers()
         self.end_headers()
 
     def _dispatch(self) -> None:
         parsed = urlparse(self.path)
+        if self.command == "GET" and _is_desktop_path(parsed.path):
+            resp = _desktop_file_response(parsed.path)
+            self._write(resp)
+            return
         if parsed.path in {"/v1/events/ws", "/v1/ws"}:
             if not self._check_auth() and parse_qs(parsed.query).get("token", [""])[0] != self.app.token:
                 self._unauthorized()
                 return
             self._websocket(parsed)
             return
-        if not self._check_auth() and parsed.path not in {"/v1/health"}:
+        # Graph cannot attach the daemon bearer for subscription validation or
+        # change notifications, so the hook must stay reachable unauthenticated.
+        if not self._check_auth() and parsed.path not in {"/v1/health", GRAPH_HOOK_PATH}:
             self._unauthorized()
             return
         length = int(self.headers.get("Content-Length") or 0)
@@ -134,6 +154,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = resp.headers or {"Content-Type": "application/json"}
         for k, v in headers.items():
             self.send_header(k, v)
+        self._send_cors_headers()
         self.end_headers()
         if resp.body:
             self.wfile.write(resp.body)
@@ -143,6 +164,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
+        self._send_cors_headers()
         self.end_headers()
         try:
             resp.stream(self.wfile)
@@ -246,13 +268,48 @@ def _ws_recv(sock: socket.socket) -> str | None:
     return data.decode("utf-8", "replace")
 
 
+def _is_desktop_path(path: str) -> bool:
+    if path in UI_ROOT_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in UI_PREFIXES)
+
+
+def _desktop_file_response(url_path: str) -> Response:
+    from mailkit.desktop import desktop_dir
+
+    relative = "index.html" if url_path in {"/", "/index.html"} else unquote(url_path).lstrip("/")
+    if url_path == "/favicon.ico":
+        relative = "brand/mark.svg"
+    root = desktop_dir().resolve()
+    target = (root / relative).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        return Response(status=404, body=b"not found", headers={"Content-Type": "text/plain"})
+    if not target.is_file():
+        return Response(status=404, body=b"not found", headers={"Content-Type": "text/plain"})
+    data = target.read_bytes()
+    mime, _ = mimetypes.guess_type(str(target))
+    if target.suffix == ".js":
+        mime = "application/javascript"
+    return Response(
+        status=200,
+        body=data,
+        headers={
+            "Content-Type": mime or "application/octet-stream",
+            "Content-Length": str(len(data)),
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
 def serve_forever(app: App, host: str, port: int, *, stop: threading.Event | None = None) -> ThreadingHTTPServer:
     Handler.app = app
     server = ThreadingHTTPServer((host, port), Handler)
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, name="mailkit-http", daemon=True)
     thread.start()
-    log.info("API listening on http://%s:%s/v1", host, port)
+    log.info("API listening on http://%s:%s/v1 (desktop UI at /)", host, port)
     if stop:
         def _watch():
             stop.wait()

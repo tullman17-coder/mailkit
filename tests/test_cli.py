@@ -1,5 +1,115 @@
+import importlib
+import io
+import json
+import urllib.error
+
+import pytest
+
+from mailkit.cli.client import ApiClient
 from mailkit.cli.main import build_parser, main
 from mailkit.cli.schemas import dump_schema, write_schema_files
+from mailkit.config import AppConfig
+from mailkit.errors import AuthError, DaemonError, ExitCode, NetworkError, NotFoundError
+
+
+def _http_error(status: int, payload) -> urllib.error.HTTPError:
+    if isinstance(payload, (dict, list)):
+        raw = json.dumps(payload).encode()
+    elif isinstance(payload, bytes):
+        raw = payload
+    else:
+        raw = str(payload).encode()
+    return urllib.error.HTTPError("http://127.0.0.1:8765/v1/x", status, "Error", hdrs=None, fp=io.BytesIO(raw))
+
+
+def _api_error(code: str, message: str) -> dict:
+    return {
+        "ok": False,
+        "schema": "mailkit.response.v1",
+        "data": None,
+        "error": {"schema": "mailkit.error.v1", "code": code, "message": message, "details": {}},
+    }
+
+
+def _client(tmp_path) -> ApiClient:
+    return ApiClient(AppConfig(), tmp_path, token="test-token")
+
+
+def _boom(exc):
+    def _raise(*_args, **_kwargs):
+        raise exc
+
+    return _raise
+
+
+def test_cli_client_maps_not_found_code_from_live_daemon(tmp_path, monkeypatch):
+    # Daemon currently serializes NotFoundError as HTTP 400 with error.code not_found.
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        _boom(_http_error(400, _api_error("not_found", "Unknown account: work"))),
+    )
+    with pytest.raises(NotFoundError) as caught:
+        _client(tmp_path).request("GET", "/v1/messages/missing")
+    assert caught.value.exit_code == ExitCode.NOT_FOUND
+
+
+def test_cli_client_maps_http_404_to_not_found(tmp_path, monkeypatch):
+    monkeypatch.setattr("urllib.request.urlopen", _boom(_http_error(404, "missing")))
+    with pytest.raises(NotFoundError) as caught:
+        _client(tmp_path).request("GET", "/v1/messages/missing")
+    assert caught.value.exit_code == ExitCode.NOT_FOUND
+
+
+def test_cli_client_maps_http_401_to_auth(tmp_path, monkeypatch):
+    body = {"ok": False, "error": {"code": "auth", "message": "invalid token"}}
+    monkeypatch.setattr("urllib.request.urlopen", _boom(_http_error(401, body)))
+    with pytest.raises(AuthError) as caught:
+        _client(tmp_path).request("GET", "/v1/status")
+    assert caught.value.exit_code == ExitCode.AUTH
+
+
+def test_cli_client_maps_http_500_to_daemon(tmp_path, monkeypatch):
+    monkeypatch.setattr("urllib.request.urlopen", _boom(_http_error(500, _api_error("error", "internal"))))
+    with pytest.raises(DaemonError) as caught:
+        _client(tmp_path).request("GET", "/v1/status")
+    assert caught.value.exit_code == ExitCode.DAEMON
+
+
+def test_cli_client_maps_network_code(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        _boom(_http_error(400, _api_error("network", "IMAP timed out"))),
+    )
+    with pytest.raises(NetworkError) as caught:
+        _client(tmp_path).request("GET", "/v1/mailboxes")
+    assert caught.value.exit_code == ExitCode.NETWORK
+
+
+def test_cli_http_401_exit_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAILKIT_HOME", str(tmp_path))
+    monkeypatch.setattr("mailkit.cli.client.is_running", lambda _root: True)
+    body = {"ok": False, "error": {"code": "auth", "message": "invalid token"}}
+    monkeypatch.setattr("urllib.request.urlopen", _boom(_http_error(401, body)))
+    assert main(["-o", "json", "messages", "get", "msg_1"]) == ExitCode.AUTH
+
+
+def test_cli_http_not_found_exit_code(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAILKIT_HOME", str(tmp_path))
+    monkeypatch.setattr("mailkit.cli.client.is_running", lambda _root: True)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        _boom(_http_error(400, _api_error("not_found", "Message not found"))),
+    )
+    assert main(["-o", "json", "messages", "get", "msg_1"]) == ExitCode.NOT_FOUND
+
+
+def test_cli_daemon_not_running_still_exits_6(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAILKIT_HOME", str(tmp_path))
+    monkeypatch.setattr("mailkit.cli.client.is_running", lambda _root: False)
+    assert main(["messages", "get", "msg_1"]) == ExitCode.DAEMON
+
+cli_main = importlib.import_module("mailkit.cli.main")
+oauth_flow = importlib.import_module("mailkit.oauth_flow")
 
 
 def test_help_lists_required_commands():
@@ -18,6 +128,7 @@ def test_help_lists_required_commands():
         "subscriptions",
         "doctor",
         "desktop",
+        "pair",
     ):
         assert token in help_text
 
@@ -38,3 +149,64 @@ def test_json_schema_command(tmp_path, monkeypatch):
 def test_write_schema_files(tmp_path):
     write_schema_files(tmp_path)
     assert (tmp_path / "event.json").exists()
+
+
+_OAUTH_TOKENS = {
+    "access_token": "at-test",
+    "refresh_token": "rt-test",
+    "token_expiry": 1,
+}
+
+_OAUTH_ADD_ARGV = [
+    "accounts",
+    "add",
+    "--address",
+    "you@gmail.com",
+    "--auth",
+    "oauth2",
+    "--client-id",
+    "cid",
+    "--no-discover",
+    "--imap-host",
+    "imap.gmail.com",
+    "--smtp-host",
+    "smtp.gmail.com",
+]
+
+
+def test_oauth2_add_posts_accounts_when_daemon_running(tmp_path, monkeypatch):
+    """OAuth add must tell a running daemon to start the watcher, like password add."""
+    calls = []
+
+    monkeypatch.setattr(cli_main, "is_running", lambda root: True)
+    monkeypatch.setattr(oauth_flow, "run_local_oauth", lambda acc, secrets, **kwargs: dict(_OAUTH_TOKENS))
+
+    def capture_request(self, method, path, *, query=None, body=None):
+        calls.append({"method": method, "path": path, "body": body})
+        return {"data": {"id": (body or {}).get("id") or "you"}}
+
+    monkeypatch.setattr(ApiClient, "request", capture_request)
+
+    rc = main(["--home", str(tmp_path), *_OAUTH_ADD_ARGV])
+    assert rc == 0
+    posts = [c for c in calls if c["method"] == "POST" and c["path"] == "/v1/accounts"]
+    assert len(posts) == 1
+    assert posts[0]["body"]["auth"] == "oauth2"
+    assert posts[0]["body"]["access_token"] == "at-test"
+    assert posts[0]["body"]["refresh_token"] == "rt-test"
+
+
+def test_oauth2_add_skips_daemon_post_when_stopped(tmp_path, monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(cli_main, "is_running", lambda root: False)
+    monkeypatch.setattr(oauth_flow, "run_local_oauth", lambda acc, secrets, **kwargs: dict(_OAUTH_TOKENS))
+    monkeypatch.setattr(
+        ApiClient,
+        "request",
+        lambda self, method, path, *, query=None, body=None: calls.append((method, path)) or {},
+    )
+
+    rc = main(["--home", str(tmp_path), *_OAUTH_ADD_ARGV])
+    assert rc == 0
+    assert calls == []

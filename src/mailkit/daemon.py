@@ -6,6 +6,8 @@ import signal
 import threading
 import time
 
+from mailkit.pair import resolve_bind_host
+
 from mailkit.api.http import App, serve_event_socket, serve_forever
 from mailkit.doctor import run_doctor, start_doctor_loop
 from mailkit.events import EventBus
@@ -39,12 +41,11 @@ def run(root=None, *, foreground: bool = True) -> int:
 
     def handle_stop(*_args):
         stop.set()
+        supervisor.request_stop()
 
     signal.signal(signal.SIGINT, handle_stop)
     signal.signal(signal.SIGTERM, handle_stop)
-    host = runtime.config.daemon.host
-    if runtime.config.daemon.allow_remote is False and host not in {"127.0.0.1", "localhost", "::1"}:
-        host = "127.0.0.1"
+    host, _allow_remote = resolve_bind_host(runtime.config)
     server = serve_forever(app, host, runtime.config.daemon.port, stop=stop)
     try:
         serve_event_socket(app, events_socket_path(runtime.root), stop)

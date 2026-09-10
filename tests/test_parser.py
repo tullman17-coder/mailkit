@@ -34,5 +34,21 @@ def test_parse_sample_eml():
 
 def test_parse_flags_from_imap_meta():
     flags = parse_flags(b"1 (UID 17 FLAGS (\\Seen \\Flagged) RFC822.SIZE 120)")
-    assert "Seen" in flags or "seen" in [f.lower() for f in flags]
-    assert any(f.lower() == "flagged" for f in flags)
+    assert flags == ["Seen", "Flagged"]
+    extras = {"1", "UID", "17", "FLAGS", "RFC822.SIZE", "RFC822", "SIZE", "120"}
+    assert extras.isdisjoint(flags)
+
+
+def test_parse_flags_from_tokenized_fetch():
+    flags = parse_flags(["1", "UID", "17", "FLAGS", "Seen", "Flagged", "RFC822.SIZE", "120"])
+    assert [f.lower() for f in flags] == ["seen", "flagged"]
+    extras = {"1", "UID", "17", "FLAGS", "RFC822.SIZE", "120"}
+    assert extras.isdisjoint(set(flags))
+
+
+def test_parse_flags_empty_group():
+    assert parse_flags(b"1 (UID 17 FLAGS () RFC822.SIZE 120)") == []
+
+
+def test_parse_flags_plain_list():
+    assert parse_flags(["\\Seen", "\\Draft"]) == ["Seen", "Draft"]

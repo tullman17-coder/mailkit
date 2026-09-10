@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Mailkit" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#C9A227</item>
+        <item name="android:statusBarColor">#2A1216</item>
+        <item name="android:navigationBarColor">#2A1216</item>
+        <item name="android:windowBackground">#2A1216</item>
+    </style>
+</resources>

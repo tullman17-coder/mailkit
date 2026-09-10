@@ -10,79 +10,36 @@ from mailkit.config import AccountConfig
 from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
+from mailkit.watchers.flag_diff import refresh_known_flags, seed_flag_state, snapshot_of
 
 log = get_logger("mailkit.poll")
 
-
-class PollWatcher:
-    plugin_type = "watcher"
-    id = "poll"
-
-    def supports(self, account: AccountConfig, provider: Any) -> bool:
-        return True
-
-    def watch(self, account: AccountConfig, provider: Any, emit: Callable[[Event], None], stop: threading.Event) -> None:
-        mailbox = account.folders.inbox or "INBOX"
-        interval = max(15, int(account.poll_interval or 45))
-        backoff = Backoff(initial=interval, maximum=300)
-        last_uid = 0
-        if getattr(provider, "store", None):
-            raw = provider.store.get_sync_cursor(account.id, mailbox, "uid")
-            if raw:
-                last_uid = int(raw)
-        while not stop.is_set():
-            try:
-                provider.connect()
-                uids = provider.recent_uids(mailbox, last_uid if last_uid else None)
-                if not last_uid and uids:
-                    # First run: record high-water mark, backfill only recent 50.
-                    last_uid = max(uids)
-                    recent = sorted(uids)[-50:]
-                    emit(
-                        Event(
-                            id=new_id("evt"),
-                            ts=utcnow(),
-                            account_id=account.id,
-                            provider_id=provider.id,
-                            mailbox=mailbox,
-                            type="service.backfill.started",
-                            data={"count": len(recent)},
-                        )
-                    )
-                    for uid in recent:
-                        _emit_created(account, provider, mailbox, uid, emit)
-                    emit(
-                        Event(
-                            id=new_id("evt"),
-                            ts=utcnow(),
-                            account_id=account.id,
-                            provider_id=provider.id,
-                            mailbox=mailbox,
-                            type="service.backfill.completed",
-                            data={"uid": last_uid},
-                        )
-                    )
-                else:
-                    for uid in uids:
-                        if uid <= last_uid:
-                            continue
-                        last_uid = uid
-                        _emit_created(account, provider, mailbox, uid, emit)
-                if getattr(provider, "store", None):
-                    provider.store.set_sync_cursor(account.id, mailbox, "uid", str(last_uid))
-                backoff.reset()
-                stop.wait(interval)
-            except Exception as exc:
-                log.warning("poll error account=%s: %s", account.id, exc)
-                stop.wait(backoff.fail())
+UID_CURSOR_KIND = "uid"
 
 
-def _emit_created(account, provider, mailbox, uid, emit) -> None:
+def load_uid_cursor(provider: Any, account_id: str, mailbox: str) -> int:
+    """Restore the shared IMAP UID high-water mark used by poll and IDLE."""
+    store = getattr(provider, "store", None)
+    if not store:
+        return 0
+    raw = store.get_sync_cursor(account_id, mailbox, UID_CURSOR_KIND)
+    if not raw:
+        return 0
+    return int(raw)
+
+
+def save_uid_cursor(provider: Any, account_id: str, mailbox: str, last_uid: int) -> None:
+    store = getattr(provider, "store", None)
+    if store:
+        store.set_sync_cursor(account_id, mailbox, UID_CURSOR_KIND, str(last_uid))
+
+
+def emit_message_created(account, provider, mailbox, uid, emit):
     try:
         msg = provider.get_message(mailbox, str(uid), peek=True)
     except Exception as exc:
-        log.warning("poll fetch %s failed: %s", uid, exc)
-        return
+        log.warning("fetch uid %s failed: %s", uid, exc)
+        return None
     emit(
         Event(
             id=new_id("evt"),
@@ -96,3 +53,77 @@ def _emit_created(account, provider, mailbox, uid, emit) -> None:
             idempotency_key=idempotency_key(account.id, mailbox, "message.created", str(uid)),
         )
     )
+    return msg
+
+
+class PollWatcher:
+    plugin_type = "watcher"
+    id = "poll"
+
+    def supports(self, account: AccountConfig, provider: Any) -> bool:
+        return True
+
+    def watch(self, account: AccountConfig, provider: Any, emit: Callable[[Event], None], stop: threading.Event) -> None:
+        mailbox = account.folders.inbox or "INBOX"
+        interval = max(15, int(account.poll_interval or 45))
+        backoff = Backoff(initial=interval, maximum=300)
+        last_uid = load_uid_cursor(provider, account.id, mailbox)
+        flag_state: dict[int, tuple[bool, bool]] = {}
+        seed_flag_state(getattr(provider, "store", None), account.id, mailbox, flag_state)
+        while not stop.is_set():
+            try:
+                provider.connect()
+                last_uid, flag_state = _poll_cycle(account, provider, mailbox, last_uid, flag_state, emit)
+                save_uid_cursor(provider, account.id, mailbox, last_uid)
+                backoff.reset()
+                stop.wait(interval)
+            except Exception as exc:
+                log.warning("poll error account=%s: %s", account.id, exc)
+                stop.wait(backoff.fail())
+
+
+def _poll_cycle(account, provider, mailbox, last_uid, flag_state, emit) -> tuple[int, dict[int, tuple[bool, bool]]]:
+    flag_state = dict(flag_state)
+    store = getattr(provider, "store", None)
+    seed_flag_state(store, account.id, mailbox, flag_state)
+    uids = provider.recent_uids(mailbox, last_uid if last_uid else None)
+    if not last_uid and uids:
+        # First run: record high-water mark, backfill only recent 50.
+        last_uid = max(uids)
+        recent = sorted(uids)[-50:]
+        emit(
+            Event(
+                id=new_id("evt"),
+                ts=utcnow(),
+                account_id=account.id,
+                provider_id=provider.id,
+                mailbox=mailbox,
+                type="service.backfill.started",
+                data={"count": len(recent)},
+            )
+        )
+        for uid in recent:
+            msg = emit_message_created(account, provider, mailbox, uid, emit)
+            if msg is not None:
+                flag_state[int(uid)] = snapshot_of(msg)
+        emit(
+            Event(
+                id=new_id("evt"),
+                ts=utcnow(),
+                account_id=account.id,
+                provider_id=provider.id,
+                mailbox=mailbox,
+                type="service.backfill.completed",
+                data={"uid": last_uid},
+            )
+        )
+    else:
+        for uid in uids:
+            if uid <= last_uid:
+                continue
+            last_uid = uid
+            msg = emit_message_created(account, provider, mailbox, uid, emit)
+            if msg is not None:
+                flag_state[int(uid)] = snapshot_of(msg)
+    refresh_known_flags(account, provider, mailbox, flag_state, emit)
+    return last_uid, flag_state

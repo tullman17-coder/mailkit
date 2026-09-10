@@ -150,6 +150,61 @@ def test_worker_restart_via_doctor(tmp_path: Path):
     assert app.supervisor.restarted == ["work"]
 
 
+def test_doctor_skips_connecting_watcher_thread(tmp_path: Path):
+    cfg = AppConfig()
+    cfg.accounts["work"] = AccountConfig(
+        id="work",
+        address="me@example.com",
+        imap=ImapSettings(host="imap.example.com"),
+    )
+    save_config(cfg, tmp_path)
+    Vault(tmp_path).put_account("work", {"password": "x"})
+    stop = threading.Event()
+
+    def block():
+        stop.wait()
+
+    thread = threading.Thread(target=block, name="mailkit-work", daemon=True)
+    thread.start()
+
+    class Connecting:
+        def alive(self):
+            return False
+
+        def __init__(self, thread):
+            self.thread = thread
+            self.status = "stopped"
+            self.last_start = time.time()
+
+    class Super:
+        def __init__(self):
+            self.workers = {"work": Connecting(thread)}
+            self.restarted = []
+
+        def restart_account(self, account_id):
+            self.restarted.append(account_id)
+            return True
+
+    class Runtime:
+        def __init__(self):
+            self.root = tmp_path
+            self.config = cfg
+
+    class App:
+        runtime = Runtime()
+        supervisor = Super()
+
+    app = App()
+    try:
+        report = run_doctor(tmp_path, repair=True, app=app)
+        finding = next(f for f in report.findings if f.check == "workers")
+        assert finding.status == "pass"
+        assert app.supervisor.restarted == []
+    finally:
+        stop.set()
+        thread.join(timeout=1)
+
+
 def test_report_schema_and_cli(tmp_path: Path, monkeypatch):
     from mailkit.cli.main import main
     from mailkit.cli.schemas import dump_schema

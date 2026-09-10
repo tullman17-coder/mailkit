@@ -12,6 +12,8 @@ from mailkit.ids import idempotency_key, new_id
 from mailkit.logutil import get_logger
 from mailkit.models import Event, utcnow
 from mailkit.providers.imap_smtp import ImapSmtpProvider
+from mailkit.watchers.flag_diff import refresh_known_flags, seed_flag_state, snapshot_of
+from mailkit.watchers.poll import emit_message_created, load_uid_cursor, save_uid_cursor
 
 log = get_logger("mailkit.idle")
 
@@ -21,11 +23,15 @@ class IdleWatcher:
     id = "idle"
 
     def supports(self, account: AccountConfig, provider: Any) -> bool:
+        tokens_fn = getattr(provider, "imap_capability_tokens", None)
+        if callable(tokens_fn):
+            return "IDLE" in {str(t).upper() for t in tokens_fn()}
         return "idle" in getattr(provider, "capabilities", lambda: set())()
 
     def watch(self, account: AccountConfig, provider: ImapSmtpProvider, emit: Callable[[Event], None], stop: threading.Event) -> None:
         mailbox = account.folders.inbox or "INBOX"
         backoff = Backoff(initial=1, maximum=120)
+        last_uid = load_uid_cursor(provider, account.id, mailbox)
         while not stop.is_set():
             client = None
             try:
@@ -33,12 +39,8 @@ class IdleWatcher:
                 typ, _ = client.select(f'"{mailbox}"' if mailbox.upper() != "INBOX" else "INBOX")
                 if typ != "OK":
                     raise RuntimeError(f"cannot select {mailbox}")
-                last_uid = 0
-                try:
-                    uids = provider.recent_uids(mailbox, None)
-                    last_uid = max(uids) if uids else 0
-                except Exception:
-                    pass
+                last_uid = max(last_uid, load_uid_cursor(provider, account.id, mailbox))
+                last_uid = self._catch_up(account, provider, mailbox, last_uid, emit)
                 emit(
                     Event(
                         id=new_id("evt"),
@@ -51,9 +53,12 @@ class IdleWatcher:
                     )
                 )
                 backoff.reset()
-                self._idle_loop(account, provider, client, mailbox, last_uid, emit, stop)
+                last_uid = self._idle_loop(account, provider, client, mailbox, last_uid, emit, stop)
             except Exception as exc:
                 log.warning("IDLE error account=%s: %s", account.id, exc)
+                stored = load_uid_cursor(provider, account.id, mailbox)
+                if stored > last_uid:
+                    last_uid = stored
                 emit(
                     Event(
                         id=new_id("evt"),
@@ -76,7 +81,25 @@ class IdleWatcher:
                         except Exception:
                             pass
 
-    def _idle_loop(self, account, provider, client, mailbox, last_uid, emit, stop) -> None:
+    def _catch_up(self, account, provider, mailbox, last_uid, emit) -> int:
+        """Emit UIDs in (cursor, max] after reconnect; seed the high-water mark on first run."""
+        try:
+            uids = provider.recent_uids(mailbox, last_uid if last_uid else None)
+        except Exception:
+            uids = []
+        if not last_uid:
+            last_uid = max(uids) if uids else 0
+            save_uid_cursor(provider, account.id, mailbox, last_uid)
+            return last_uid
+        for uid in uids:
+            if uid <= last_uid:
+                continue
+            last_uid = max(last_uid, uid)
+            emit_message_created(account, provider, mailbox, uid, emit)
+        save_uid_cursor(provider, account.id, mailbox, last_uid)
+        return last_uid
+
+    def _idle_loop(self, account, provider, client, mailbox, last_uid, emit, stop) -> int:
         # Slice IDLE into 60s windows so shutdown is prompt; IMAP servers cap IDLE near 29 minutes.
         if not last_uid:
             try:
@@ -84,45 +107,39 @@ class IdleWatcher:
                 last_uid = max(known) if known else 0
             except Exception:
                 last_uid = 0
+        flag_state: dict[int, tuple[bool, bool]] = {}
+        seed_flag_state(getattr(provider, "store", None), account.id, mailbox, flag_state)
+        if last_uid and last_uid not in flag_state:
+            try:
+                seeded = provider.get_message(mailbox, str(last_uid), peek=True)
+                flag_state[int(last_uid)] = snapshot_of(seeded)
+            except Exception:
+                pass
         while not stop.is_set():
             notified = _wait_idle(client, 60.0, stop)
             if stop.is_set():
-                return
+                return last_uid
             try:
                 new_uids = provider.recent_uids(mailbox, last_uid if last_uid else None)
             except Exception as exc:
                 log.info("uid refresh failed: %s", exc)
                 raise
-            if not last_uid:
-                last_uid = max(new_uids) if new_uids else 0
-                continue
             for uid in new_uids:
                 if uid <= last_uid:
                     continue
                 last_uid = max(last_uid, uid)
-                try:
-                    msg = provider.get_message(mailbox, str(uid), peek=True)
-                except Exception as exc:
-                    log.warning("fetch uid %s failed: %s", uid, exc)
-                    continue
-                emit(
-                    Event(
-                        id=new_id("evt"),
-                        ts=utcnow(),
-                        account_id=account.id,
-                        provider_id=provider.id,
-                        mailbox=mailbox,
-                        type="message.created",
-                        thread_id=msg.thread_id,
-                        message=msg.summary(),
-                        idempotency_key=idempotency_key(account.id, mailbox, "message.created", str(uid)),
-                    )
-                )
-            if not notified:
+                msg = emit_message_created(account, provider, mailbox, uid, emit)
+                if msg is not None:
+                    flag_state[int(uid)] = snapshot_of(msg)
+            save_uid_cursor(provider, account.id, mailbox, last_uid)
+            if notified:
+                refresh_known_flags(account, provider, mailbox, flag_state, emit)
+            else:
                 try:
                     client.noop()
                 except Exception:
                     raise
+        return last_uid
 
 
 def _wait_idle(client, duration: float, stop: threading.Event) -> bool:

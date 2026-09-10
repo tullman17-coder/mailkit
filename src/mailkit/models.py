@@ -38,6 +38,36 @@ EVENT_TYPES = (
     "service.doctor",
 )
 
+# API flag/read mutations → event types. Keys must stay distinct from message.created.
+FLAG_MUTATION_EVENTS = {
+    "flag": "message.flagged",
+    "unflag": "message.unflagged",
+    "read": "message.read",
+    "unread": "message.unread",
+}
+
+
+def apply_flag_mutation(snapshot: dict, action: str) -> dict:
+    """Copy a message snapshot with flag/read state applied (in-memory only)."""
+    data = dict(snapshot)
+    flags = [str(f) for f in (data.get("flags") or [])]
+    if action == "flag":
+        if not any(f.lower() == "flagged" for f in flags):
+            flags.append("Flagged")
+        data["flagged"] = True
+    elif action == "unflag":
+        flags = [f for f in flags if f.lower() != "flagged"]
+        data["flagged"] = False
+    elif action == "read":
+        if not any(f.lower() == "seen" for f in flags):
+            flags.append("Seen")
+        data["unread"] = False
+    elif action == "unread":
+        flags = [f for f in flags if f.lower() != "seen"]
+        data["unread"] = True
+    data["flags"] = flags
+    return data
+
 MAILBOX_ROLES = ("inbox", "saved", "sent", "drafts", "archives", "trash", "junk", "custom")
 
 
@@ -118,6 +148,33 @@ class Message:
 
     def summary(self) -> dict:
         return self.to_dict(include_body=False)
+
+
+_SYSTEM_FLAGS = {"Seen", "Flagged", "Deleted", "Draft", "Answered", "Recent"}
+
+
+def canonical_flag(flag: str) -> str:
+    token = str(flag).lstrip("\\")
+    capped = token.capitalize()
+    return capped if capped in _SYSTEM_FLAGS else token
+
+
+def apply_system_flags(payload: dict, *, add: list[str] | None = None, remove: list[str] | None = None) -> dict:
+    """Return a copy of a cached message dict with IMAP system flags applied."""
+    flags = [canonical_flag(f) for f in (payload.get("flags") or [])]
+    drop = {canonical_flag(f) for f in (remove or [])}
+    flags = [f for f in flags if f not in drop]
+    for token in (canonical_flag(f) for f in (add or [])):
+        if token and token not in flags:
+            flags.append(token)
+    flag_set = {f.lower() for f in flags}
+    updated = dict(payload)
+    updated["flags"] = flags
+    updated["flagged"] = "flagged" in flag_set
+    updated["unread"] = "seen" not in flag_set
+    updated["draft"] = "draft" in flag_set
+    updated["answered"] = "answered" in flag_set
+    return updated
 
 
 @dataclass
