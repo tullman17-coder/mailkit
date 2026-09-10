@@ -10,6 +10,7 @@ def test_shared_ui_is_phone_aware():
     js = (ROOT / "desktop/js/app.js").read_text()
     css = (ROOT / "desktop/css/app.css").read_text()
     assert 'id="app"' in html
+    assert 'id="mobile-bar"' in html
     assert 'id="nav-back"' in html
     assert 'id="pair-btn"' in html
     assert "apple-mobile-web-app-capable" in html

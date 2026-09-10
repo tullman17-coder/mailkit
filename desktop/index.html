@@ -18,6 +18,10 @@
   </head>
   <body>
     <div class="app" id="app" data-pane="accounts">
+      <div class="mobile-bar" id="mobile-bar">
+        <button class="btn nav-back" id="nav-back" type="button">Back</button>
+        <h2 id="mobile-title">Mailkit</h2>
+      </div>
       <nav class="rail" aria-label="Accounts">
         <div class="brand">
           <img src="./brand/mark.svg" alt="Mailkit — two T-rexes holding a sealed envelope" />
@@ -46,7 +50,6 @@
 
       <section class="list" aria-label="Messages">
         <div class="list-head">
-          <button class="btn nav-back" id="nav-back" type="button">Back</button>
           <h2 id="list-title">Inbox</h2>
           <div class="filters">
             <button class="chip" type="button" data-filter="unread" aria-pressed="false">Unread</button>

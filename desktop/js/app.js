@@ -70,6 +70,11 @@
     if (app && app.setAttribute) app.setAttribute("data-pane", state.pane);
     const back = $("nav-back");
     if (back) back.hidden = state.shell !== "mobile" || state.pane === "accounts";
+    const title = $("mobile-title");
+    if (title) {
+      const labels = { accounts: "Mailkit", mailboxes: "Mailbox", list: "Messages", read: "Message" };
+      title.textContent = labels[state.pane] || "Mailkit";
+    }
   }
   const toast = (msg) => {
     const el = $("toast");
@@ -258,8 +263,11 @@
       return;
     }
     renderAccounts();
-    if (state.shell === "mobile") setPane("accounts");
-    if (state.accounts[0]) await selectAccount(state.accounts[0].id);
+    if (state.shell === "mobile") {
+      setPane("accounts");
+    } else if (state.accounts[0]) {
+      await selectAccount(state.accounts[0].id);
+    }
   }
 
   function closeCompose() {
