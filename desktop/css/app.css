@@ -476,6 +476,10 @@ select {
     display: inline-flex;
   }
 
+  .nav-back[hidden] {
+    display: none;
+  }
+
   .rail,
   .boxes,
   .list,
@@ -534,6 +538,10 @@ html[data-shell="mobile"] .mobile-bar {
 
 html[data-shell="mobile"] .nav-back {
   display: inline-flex;
+}
+
+html[data-shell="mobile"] .nav-back[hidden] {
+  display: none;
 }
 
 html[data-shell="mobile"] .app {
