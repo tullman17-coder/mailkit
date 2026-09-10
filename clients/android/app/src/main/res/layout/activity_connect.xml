@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp"
+    android:background="#2A1216">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/connect_copy"
+        android:textColor="#F5E6B8"
+        android:paddingBottom="16dp" />
+
+    <EditText
+        android:id="@+id/engine_url"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/engine_hint"
+        android:inputType="textUri"
+        android:textColor="#F5E6B8"
+        android:textColorHint="#A89A7A" />
+
+    <EditText
+        android:id="@+id/engine_token"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/token_hint"
+        android:inputType="textPassword"
+        android:textColor="#F5E6B8"
+        android:textColorHint="#A89A7A" />
+
+    <Button
+        android:id="@+id/connect"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/connect"
+        android:layout_marginTop="16dp" />
+</LinearLayout>

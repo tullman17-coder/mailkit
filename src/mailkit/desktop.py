@@ -1,7 +1,8 @@
-"""Desktop shell. The window is a client of the local API — no mail logic lives here."""
+"""Native desktop window. The window is a client of the local API — no mail logic lives here."""
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -54,12 +55,26 @@ def ensure_engine(root: Path | None = None) -> None:
         time.sleep(0.15)
 
 
+def _window_kwargs(url: str) -> dict:
+    kwargs = {
+        "title": "Mailkit",
+        "url": url,
+        "width": 1280,
+        "height": 820,
+        "min_size": (390, 640),
+        "background_color": "#2A1216",
+        "text_select": True,
+    }
+    return kwargs
+
+
 def run_desktop(root: Path | None = None) -> int:
     try:
         import webview
     except ImportError as exc:
         raise SystemExit(
-            "Desktop extra missing. Install with: pip install 'mailkit[desktop]'"
+            "Native desktop extra missing. Install with: pip install 'mailkit[desktop]'\n"
+            "Then run: mailkit desktop"
         ) from exc
 
     home = data_dir(root)
@@ -71,24 +86,26 @@ def run_desktop(root: Path | None = None) -> int:
         raise SystemExit(f"Desktop UI not found at {index}")
 
     url = index.resolve().as_uri()
-    window = webview.create_window(
-        "Mailkit",
-        url,
-        width=1280,
-        height=820,
-        min_size=(720, 520),
-        background_color="#2A1216",
-    )
+    window = webview.create_window(**_window_kwargs(url))
+    origin = f"http://{cfg.daemon.host if cfg.daemon.host not in {'0.0.0.0', '::'} else '127.0.0.1'}:{cfg.daemon.port}"
 
     def inject():
         time.sleep(0.4)
-        origin = f"http://{cfg.daemon.host}:{cfg.daemon.port}"
-        js = f"window.mailkitDesktop && window.mailkitDesktop.setToken({token!r}, {origin!r})"
+        token_js = json.dumps(token)
+        origin_js = json.dumps(origin)
+        js = (
+            "document.documentElement.setAttribute('data-shell','desktop');"
+            f"window.mailkitDesktop && window.mailkitDesktop.setToken({token_js}, {origin_js}, 'desktop')"
+        )
         try:
             window.evaluate_js(js)
         except Exception as exc:
             log.warning("could not inject API token: %s", exc)
 
     threading.Thread(target=inject, daemon=True).start()
-    webview.start()
+    start_kw = {}
+    try:
+        webview.start(private_mode=False, **start_kw)
+    except TypeError:
+        webview.start()
     return 0

@@ -18,6 +18,8 @@
     unread: false,
     flagged: false,
     replyId: null,
+    pane: "accounts",
+    shell: detectShell(),
   };
 
   const $ = (id) => document.getElementById(id);
@@ -38,6 +40,36 @@
       /* file:// desktop shell */
     }
     return "http://127.0.0.1:8765";
+  }
+  function detectShell() {
+    try {
+      const html = typeof document !== "undefined" ? document.documentElement : null;
+      const attr = html && html.getAttribute("data-shell");
+      if (attr) return attr;
+      const search = typeof location !== "undefined" ? location.search || "" : "";
+      const q = new URLSearchParams(search).get("shell");
+      if (q) return q;
+      if (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 860px)").matches) {
+        return "mobile";
+      }
+    } catch {
+      /* ignore */
+    }
+    return "desktop";
+  }
+  function applyShell() {
+    if (typeof document === "undefined" || !document.documentElement) return;
+    document.documentElement.setAttribute("data-shell", state.shell || "desktop");
+    setPane(state.pane);
+  }
+  function setPane(pane) {
+    state.pane = pane || "accounts";
+    if (typeof document === "undefined") return;
+    if (document.documentElement) document.documentElement.setAttribute("data-pane", state.pane);
+    const app = document.getElementById ? document.getElementById("app") : null;
+    if (app && app.setAttribute) app.setAttribute("data-pane", state.pane);
+    const back = $("nav-back");
+    if (back) back.hidden = state.shell !== "mobile" || state.pane === "accounts";
   }
   const toast = (msg) => {
     const el = $("toast");
@@ -155,6 +187,7 @@
     state.current = null;
     renderAccounts();
     where();
+    if (state.shell === "mobile") setPane("mailboxes");
     await loadMessages();
     renderRead();
   }
@@ -164,6 +197,7 @@
     state.current = null;
     renderBoxes();
     where();
+    if (state.shell === "mobile") setPane("list");
     await loadMessages();
     renderRead();
   }
@@ -196,6 +230,7 @@
     }
     renderList();
     renderRead();
+    if (state.shell === "mobile") setPane("read");
   }
 
   function esc(value) {
@@ -206,6 +241,7 @@
   }
 
   async function boot() {
+    applyShell();
     renderBoxes();
     try {
       const status = await api("GET", "/v1/health");
@@ -222,6 +258,7 @@
       return;
     }
     renderAccounts();
+    if (state.shell === "mobile") setPane("accounts");
     if (state.accounts[0]) await selectAccount(state.accounts[0].id);
   }
 
@@ -239,6 +276,35 @@
     $("compose").classList.add("open");
   });
   $("compose-cancel").addEventListener("click", closeCompose);
+  const navBack = $("nav-back");
+  if (navBack) {
+    navBack.addEventListener("click", () => {
+      if (state.pane === "read") setPane("list");
+      else if (state.pane === "list") setPane("mailboxes");
+      else setPane("accounts");
+    });
+  }
+  const pairBtn = $("pair-btn");
+  const pairModal = $("pair");
+  if (pairBtn && pairModal) {
+    pairBtn.addEventListener("click", async () => {
+      try {
+        const data = await api("GET", "/v1/pair");
+        $("pair-url").value = data.url || "";
+        $("pair-token").value = data.token || "";
+        $("pair-link").value = data.deeplink || "";
+        if ($("pair-cli")) $("pair-cli").textContent = data.cli || "mailkit -o json messages list --mailbox inbox";
+      } catch (err) {
+        toast(err.message);
+        return;
+      }
+      pairModal.classList.add("open");
+    });
+  }
+  const pairClose = $("pair-close");
+  if (pairClose) {
+    pairClose.addEventListener("click", () => $("pair").classList.remove("open"));
+  }
   $("compose-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     if (!state.account) {
@@ -298,6 +364,7 @@
       state.current = null;
       await loadMessages();
       renderRead();
+      if (state.shell === "mobile") setPane("list");
     } catch (err) {
       toast(err.message);
     }
@@ -323,12 +390,19 @@
   });
 
   window.mailkitDesktop = {
-    setToken(token, base) {
+    setToken(token, base, shell) {
       state.token = token || "";
       if (base) state.base = base;
+      if (shell) state.shell = shell;
+      applyShell();
       boot();
+    },
+    setShell(shell) {
+      state.shell = shell || "desktop";
+      applyShell();
     },
   };
 
+  applyShell();
   boot();
 })();

@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#2A1216" />
     <title>Mailkit</title>
     <link rel="icon" href="./brand/mark.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -14,7 +17,7 @@
     <link rel="stylesheet" href="./css/app.css" />
   </head>
   <body>
-    <div class="app">
+    <div class="app" id="app" data-pane="accounts">
       <nav class="rail" aria-label="Accounts">
         <div class="brand">
           <img src="./brand/mark.svg" alt="Mailkit — two T-rexes holding a sealed envelope" />
@@ -29,6 +32,7 @@
         </div>
         <div class="rail-foot">
           <button class="btn primary" id="compose-btn" type="button">Compose</button>
+          <button class="btn" id="pair-btn" type="button">Phone</button>
           <button class="btn" id="doctor-btn" type="button">Doctor</button>
         </div>
       </nav>
@@ -42,6 +46,7 @@
 
       <section class="list" aria-label="Messages">
         <div class="list-head">
+          <button class="btn nav-back" id="nav-back" type="button">Back</button>
           <h2 id="list-title">Inbox</h2>
           <div class="filters">
             <button class="chip" type="button" data-filter="unread" aria-pressed="false">Unread</button>
@@ -69,6 +74,23 @@
         <span id="where">No account selected</span>
         <span id="engine">Engine: checking…</span>
       </footer>
+    </div>
+
+    <div class="modal" id="pair" role="dialog" aria-labelledby="pair-title">
+      <div class="sheet">
+        <h2 id="pair-title">Connect a phone</h2>
+        <p class="empty">Open the Mailkit iOS or Android app and paste this, or run <span class="mono">mailkit pair --lan</span> so the phone can reach this machine.</p>
+        <label for="pair-url">Engine</label>
+        <input id="pair-url" readonly />
+        <label for="pair-token">Token</label>
+        <input id="pair-token" readonly />
+        <label for="pair-link">App link</label>
+        <input id="pair-link" readonly />
+        <p class="meta mono" id="pair-cli">mailkit -o json messages list --mailbox inbox</p>
+        <div class="actions">
+          <button class="btn primary" type="button" id="pair-close">Done</button>
+        </div>
+      </div>
     </div>
 
     <div class="modal" id="compose" role="dialog" aria-labelledby="compose-title">

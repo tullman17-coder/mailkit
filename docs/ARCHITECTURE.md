@@ -1,15 +1,15 @@
 # Architecture
 
-Mailkit is a **local email engine**. It is not a host, proxy, or provider. Every connection goes from this process to Gmail, Microsoft 365, Yahoo, or a custom IMAP/SMTP server.
+Mailkit is a **native desktop and mobile email app** with a local engine and a CLI so AI agents can use it. It is not a host, proxy, or provider. Every connection goes from this process to Gmail, Microsoft 365, Yahoo, or a custom IMAP/SMTP server.
 
-The desktop UI is optional and out of tree. Core logic never lives in an app shell, Electron, or Swift.
+The Hallmark UI is shared. Native shells (pywebview on desktop, WKWebView / Android WebView on phones) and the CLI are clients of the same API. Mail logic never lives in an app shell.
 
 ```
-Agents / CLI / future GUI
+Desktop app · iOS · Android · CLI / agents
         │  HTTP / SSE / WebSocket / Unix event socket / NDJSON
         ▼
 ┌─────────────────────────────────────────────┐
-│  Daemon (long-running)                      │
+│  Daemon (long-running, this machine)         │
 │  REST /v1  ·  SSE  ·  WS  ·  webhooks       │
 │  Event bus (durable SQLite log + live fan)  │
 │  Rules + hook plugins                       │
@@ -32,7 +32,8 @@ Each account worker holds a persistent connection (IMAP IDLE) or a native push c
 | Piece | Role |
 |---|---|
 | Daemon | Owns connections, tokens, event log, API |
-| CLI | Human/script/agent front end. Talks to the daemon |
+| CLI | Native front end for humans and AI agents. Talks to the daemon |
+| Desktop / iOS / Android | Native windows. HTTP clients of `/v1` only |
 | Encrypted vault | Passwords and OAuth tokens, AES-256-GCM, local only |
 | SQLite | Message index, events, subscriptions, rules, cursors |
 | Plugins | Providers, auth strategies, watchers, message hooks |
