@@ -9,19 +9,22 @@ struct MailRootView: View {
     @State private var addingAccount = false
     @State private var showingSettings = false
     @State private var draft: ComposeDraft?
+    @State private var preferredCompactColumn: NavigationSplitViewColumn = .content
 
     var body: some View {
         Group {
             if store.isConnected {
-                NavigationSplitView {
+                NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
                     List(selection: Binding(get: { store.selectedFolder?.id }, set: { id in
                         if let folder = store.mailboxes.first(where: { $0.id == id }) {
+                            preferredCompactColumn = .content
                             store.perform { try await store.selectFolder(folder) }
                         }
                     })) {
                         Section("Accounts") {
                             ForEach(store.accounts) { account in
                                 Button {
+                                    preferredCompactColumn = .content
                                     store.perform { try await store.selectAccount(account) }
                                 } label: {
                                     HStack {
@@ -62,7 +65,7 @@ struct MailRootView: View {
                     }
                     .refreshable { await refreshAccounts() }
                 } content: {
-                    MessageListView(draft: $draft)
+                    MessageListView(draft: $draft, addingAccount: $addingAccount, showingSettings: $showingSettings)
                 } detail: {
                     if let message = store.selectedMessage {
                         MessageDetailView(message: message, draft: $draft)
@@ -98,6 +101,9 @@ struct MailRootView: View {
         .sheet(isPresented: $addingAccount) { AddAccountView() }
         .sheet(isPresented: $showingSettings) { MailSettingsView() }
         .sheet(item: $draft) { ComposeView(draft: $0) }
+        .onChange(of: store.isConnected) { _, connected in
+            if connected { preferredCompactColumn = .content }
+        }
     }
 
     private func refreshAccounts() async {
@@ -155,6 +161,8 @@ private struct ConnectionView: View {
 private struct MessageListView: View {
     @Environment(MailStore.self) private var store
     @Binding var draft: ComposeDraft?
+    @Binding var addingAccount: Bool
+    @Binding var showingSettings: Bool
     @AppStorage("mailkit.messageSort") private var sortOrder: MessageSort = .newest
 
     var body: some View {
@@ -200,7 +208,103 @@ private struct MessageListView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+        .overlay {
+            if store.messages.isEmpty {
+                if store.busy { ProgressView("Loading mail…") }
+                else { ContentUnavailableView(store.selectedFolder == nil ? "Choose a mailbox" : "No matching messages", systemImage: "tray", description: Text(store.selectedFolder == nil ? "Add or select an account to see its mailboxes." : "Try All mail in the filter menu, change your search, or refresh.")) }
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
+            MailboxRails(addingAccount: $addingAccount, sortOrder: $sortOrder)
+        }
+        .navigationTitle(store.selectedFolder?.name ?? "Messages")
+        .searchable(text: $store.searchText, prompt: "Search this mailbox")
+        .onSubmit(of: .search) { store.perform { try await store.loadMessages() } }
+        .onChange(of: store.searchText) { _, value in
+            if value.isEmpty, store.selectedFolder != nil { store.perform { try await store.loadMessages() } }
+        }
+        .refreshable {
+            do { try await store.loadMessages() } catch { store.error = error.localizedDescription }
+        }
+        .toolbar {
+            ToolbarItem {
+                Button("Refresh", systemImage: "arrow.clockwise") { store.perform { try await store.loadMessages() } }
+                    .disabled(store.busy || store.selectedFolder == nil)
+            }
+            ToolbarItem {
+                Button("Settings", systemImage: "gearshape") { showingSettings = true }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Compose", systemImage: "square.and.pencil") {
+                    draft = ComposeDraft(accountID: store.selectedAccount?.id ?? "")
+                }.disabled(store.accounts.isEmpty)
+            }
+        }
+        .disabled(store.busy)
+    }
+}
+
+private struct MailboxRails: View {
+    @Environment(MailStore.self) private var store
+    @Binding var addingAccount: Bool
+    @Binding var sortOrder: MessageSort
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(store.accounts) { account in
+                        AccountTab(account: account, selected: store.selectedAccount?.id == account.id) {
+                            store.perform { try await store.selectAccount(account) }
+                        }
+                    }
+                    Button("Add account", systemImage: "plus") { addingAccount = true }
+                        .labelStyle(.iconOnly)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .accessibilityLabel("Add account")
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+
+            if store.selectedAccount != nil {
+                Divider()
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(MailFolder.railOrdered(store.mailboxes)) { folder in
+                            let selected = store.selectedFolder?.id == folder.id
+                            let status = [
+                                selected ? "Selected" : nil,
+                                folder.unseen.flatMap { $0 > 0 ? "\($0) unread" : nil }
+                            ].compactMap { $0 }.joined(separator: ", ")
+                            Button {
+                                store.perform { try await store.selectFolder(folder) }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: folderIcon(folder.role))
+                                    Text(folder.railTitle).lineLimit(1)
+                                    if let unseen = folder.unseen, unseen > 0 {
+                                        Text(unseen.formatted()).font(.caption.weight(.semibold))
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 44)
+                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                                .background(selected ? Color.accentColor.opacity(0.14) : .clear, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Mailbox: \(folder.railTitle)")
+                            .accessibilityValue(status)
+                        }
+                        if store.mailboxes.isEmpty && store.busy { ProgressView().frame(minHeight: 44) }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 2)
+                }
+                .id(store.selectedAccount?.id)
+            }
+
+            Divider()
             HStack {
                 Menu {
                     Picker("Filter messages", selection: Binding(get: { store.messageFilter }, set: { filter in
@@ -227,36 +331,42 @@ private struct MessageListView: View {
             .font(.subheadline)
             .padding(.horizontal)
             .padding(.vertical, 10)
-            .background(.bar)
             .disabled(store.busy || store.selectedFolder == nil)
         }
-        .overlay {
-            if store.messages.isEmpty {
-                if store.busy { ProgressView("Loading mail…") }
-                else { ContentUnavailableView(store.selectedFolder == nil ? "Choose a mailbox" : "No matching messages", systemImage: "tray", description: Text(store.selectedFolder == nil ? "Add or select an account to see its mailboxes." : "Try All mail in the filter menu, change your search, or refresh.")) }
-            }
-        }
-        .navigationTitle(store.selectedFolder?.name ?? "Messages")
-        .searchable(text: $store.searchText, prompt: "Search this mailbox")
-        .onSubmit(of: .search) { store.perform { try await store.loadMessages() } }
-        .onChange(of: store.searchText) { _, value in
-            if value.isEmpty, store.selectedFolder != nil { store.perform { try await store.loadMessages() } }
-        }
-        .refreshable {
-            do { try await store.loadMessages() } catch { store.error = error.localizedDescription }
-        }
-        .toolbar {
-            ToolbarItem {
-                Button("Refresh", systemImage: "arrow.clockwise") { store.perform { try await store.loadMessages() } }
-                    .disabled(store.busy || store.selectedFolder == nil)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button("Compose", systemImage: "square.and.pencil") {
-                    draft = ComposeDraft(accountID: store.selectedAccount?.id ?? "")
-                }.disabled(store.accounts.isEmpty)
-            }
-        }
+        .background(.bar)
         .disabled(store.busy)
+    }
+}
+
+private struct AccountTab: View {
+    let account: MailAccount
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.name.isEmpty ? account.address : account.name)
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                    .lineLimit(1)
+                Text(account.address)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 150, alignment: .leading)
+            .frame(minHeight: 44)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(selected ? Color.accentColor.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(alignment: .bottom) {
+                Capsule().fill(selected ? Color.accentColor : .clear).frame(height: 3)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Account: \(account.address)")
+        .accessibilityValue(selected ? "Selected" : "")
     }
 }
 

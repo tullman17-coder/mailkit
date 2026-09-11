@@ -9,6 +9,39 @@ struct MailFolder: Decodable, Identifiable, Hashable {
     let name, role: String
     let unseen: Int?
     let selectable: Bool
+
+    var railTitle: String {
+        switch role {
+        case "inbox": "Inbox"
+        case "junk": "Spam"
+        case "trash": "Deleted"
+        case "sent": "Sent"
+        case "drafts": "Drafts"
+        case "archives": name.localizedCaseInsensitiveContains("all mail") ? "All Mail" : "Archive"
+        case "saved": "Starred"
+        default: name
+        }
+    }
+
+    private var railRank: Int {
+        switch role {
+        case "inbox": 0
+        case "junk": 1
+        case "trash": 2
+        case "sent": 3
+        case "drafts": 4
+        case "archives": 5
+        case "saved": 6
+        default: 7
+        }
+    }
+
+    static func railOrdered(_ folders: [MailFolder]) -> [MailFolder] {
+        folders.sorted {
+            if $0.railRank != $1.railRank { return $0.railRank < $1.railRank }
+            return $0.railTitle.localizedStandardCompare($1.railTitle) == .orderedAscending
+        }
+    }
 }
 
 struct MailAddress: Decodable, Hashable {

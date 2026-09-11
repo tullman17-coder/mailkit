@@ -53,6 +53,11 @@ struct Checks {
         assert(MessageFilter.unread.query == ["unread": "true"])
         assert(MessageFilter.flagged.query == ["flagged": "true"])
         assert(MessageFilter.unreadAndFlagged.query == ["unread": "true", "flagged": "true"])
+        let folders = try JSONDecoder().decode([MailFolder].self, from: Data(#"[{"name":"Team","role":"custom","unseen":2,"selectable":true},{"name":"All Mail","role":"archives","unseen":null,"selectable":true},{"name":"Deleted Items","role":"trash","unseen":0,"selectable":true},{"name":"Sent Mail","role":"sent","unseen":0,"selectable":true},{"name":"Junk Email","role":"junk","unseen":3,"selectable":true},{"name":"INBOX","role":"inbox","unseen":1,"selectable":true},{"name":"Drafts","role":"drafts","unseen":0,"selectable":true},{"name":"Starred","role":"saved","unseen":0,"selectable":true}]"#.utf8))
+        let orderedFolders = MailFolder.railOrdered(folders)
+        assert(orderedFolders.map(\.name) == ["INBOX", "Junk Email", "Deleted Items", "Sent Mail", "Drafts", "All Mail", "Starred", "Team"])
+        assert(orderedFolders.map(\.railTitle) == ["Inbox", "Spam", "Deleted", "Sent", "Drafts", "All Mail", "Starred", "Team"])
+        assert(MailFolder.railOrdered(folders.filter { $0.role != "inbox" }).first?.name == "Junk Email")
         for (payload, verified) in [
             (#"{"ok":true,"mailboxes":["INBOX"]}"#, false),
             (#"{"ok":true,"imap":true,"smtp":false}"#, false),

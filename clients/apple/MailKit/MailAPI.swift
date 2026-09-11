@@ -137,6 +137,9 @@ final class MailStore {
         mailboxes = []; messages = []; selectedAccount = nil; selectedFolder = nil; selectedMessage = nil
         isConnected = true
         error = nil
+        if let account = accounts.first {
+            try await selectAccount(account)
+        }
     }
 
     func disconnect() {
@@ -158,11 +161,15 @@ final class MailStore {
 
     func selectAccount(_ account: MailAccount) async throws {
         let stamp = generation
+        messageRequest = UUID()
         selectedAccount = account; selectedFolder = nil; selectedMessage = nil
         mailboxes = []; messages = []; searchText = ""
         let rows: [MailFolder] = try await client().request(["mailboxes"], query: ["account": account.id])
         guard stamp == generation, selectedAccount?.id == account.id else { return }
-        mailboxes = rows.filter(\.selectable)
+        let folders = rows.filter(\.selectable)
+        mailboxes = folders
+        guard let folder = folders.first(where: { $0.role == "inbox" }) ?? MailFolder.railOrdered(folders).first else { return }
+        try await selectFolder(folder)
     }
 
     func selectFolder(_ folder: MailFolder) async throws {
