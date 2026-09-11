@@ -3,7 +3,7 @@
 Open `clients/apple/MailKit.xcodeproj` in Xcode and select the shared **MailKit** scheme.
 One SwiftUI target supports iPhone/iPad on iOS 17+ and native Mac on macOS 14+.
 Bundle ID: `org.zermo.mailkit`. Selected team: **ZERMO BRANDS LLC — FMYLGYWYXW**.
-Version: **0.2.0 (3)**.
+Version: **0.2.0 (4)**.
 
 These are clients of the existing MailKit engine. Python, IMAP/SMTP connections,
 mail credentials, indexing, and routing rules run on your Mac or server. iOS does
@@ -62,13 +62,16 @@ declares the MailKit URL scheme in Info.plist.
 
 ## Native behavior and current limits
 
-The message list starts with an account tab rail, then a mailbox rail for Inbox,
-Spam, Deleted, Sent, and provider/custom folders. Navigation is account → mailbox
-→ message. The app can list/search/read mail,
+The message list starts with an account tab rail. On macOS, the side rail lists
+the selected account's Inbox, Spam, Deleted, Sent, and provider/custom folders,
+while the main pane switches between the message list and reader. iPhone and iPad
+retain the compact mailbox rail. Navigation is account → mailbox → message. The
+app can list/search/read mail,
 compose/reply, change flags/read state, move/archive messages, test/remove
 accounts, and create account-scoped subject routing rules with tag/move actions.
-HTML bodies disable scripts, remote resources, embedded navigation, and persistent
-web storage. Link taps open externally. Plain text uses native selectable text.
+HTML bodies preserve sender styling while disabling scripts, remote resources,
+embedded navigation, and persistent web storage. Link taps open externally. Plain
+text uses native selectable text.
 
 The message list defaults to newest date first, with visible date, sender A–Z,
 and subject A–Z sorting. Dates are compared as timestamps across time zones;

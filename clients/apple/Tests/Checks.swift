@@ -26,6 +26,14 @@ struct Checks {
         let message = try JSONDecoder().decode(MailMessage.self, from: Data(fixture.utf8))
         assert(message.accountID == "work" && message.nativeID == "42" && message.bodyText == "Body")
         assert(message.from.first?.display == "Sender <sender@example.com>")
+        var richFixture = try JSONSerialization.jsonObject(with: Data(fixture.utf8)) as! [String: Any]
+        richFixture["body_text"] = "Plain text fallback"
+        richFixture["body_html"] = "<p style=\"color: rebeccapurple\">Styled sender mail</p>"
+        let richMessage = try JSONDecoder().decode(MailMessage.self, from: JSONSerialization.data(withJSONObject: richFixture))
+        assert(richMessage.renderableHTML == "<p style=\"color: rebeccapurple\">Styled sender mail</p>")
+        richFixture["body_html"] = " \n"
+        let blankRichMessage = try JSONDecoder().decode(MailMessage.self, from: JSONSerialization.data(withJSONObject: richFixture))
+        assert(blankRichMessage.renderableHTML == nil)
         func sample(_ uid: Int, _ date: String, sender: String = "Sender", subject: String = "Example", received: String? = nil) throws -> MailMessage {
             var value = try JSONSerialization.jsonObject(with: Data(fixture.utf8)) as! [String: Any]
             value["id"] = "m\(uid)"; value["native_id"] = String(uid); value["date"] = date

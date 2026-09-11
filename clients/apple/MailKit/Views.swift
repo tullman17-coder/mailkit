@@ -14,65 +14,7 @@ struct MailRootView: View {
     var body: some View {
         Group {
             if store.isConnected {
-                NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
-                    List(selection: Binding(get: { store.selectedFolder?.id }, set: { id in
-                        if let folder = store.mailboxes.first(where: { $0.id == id }) {
-                            preferredCompactColumn = .content
-                            store.perform { try await store.selectFolder(folder) }
-                        }
-                    })) {
-                        Section("Accounts") {
-                            ForEach(store.accounts) { account in
-                                Button {
-                                    preferredCompactColumn = .content
-                                    store.perform { try await store.selectAccount(account) }
-                                } label: {
-                                    HStack {
-                                        VStack(alignment: .leading) {
-                                            Text(account.name).foregroundStyle(.primary)
-                                            Text(account.address).font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        if store.selectedAccount?.id == account.id {
-                                            Image(systemName: "checkmark").accessibilityLabel("Selected")
-                                        }
-                                    }
-                                }.disabled(store.busy)
-                            }
-                            Button("Add account", systemImage: "plus") { addingAccount = true }
-                        }
-                        if store.selectedAccount != nil {
-                            Section("Mailboxes") {
-                                ForEach(store.mailboxes.filter(\.selectable)) { folder in
-                                    NavigationLink(value: folder.id) {
-                                        HStack {
-                                            Label(folder.name, systemImage: folderIcon(folder.role))
-                                            Spacer()
-                                            if let unseen = folder.unseen, unseen > 0 {
-                                                Text(unseen.formatted()).font(.caption).foregroundStyle(.secondary)
-                                            }
-                                        }
-                                    }.disabled(store.busy)
-                                }
-                            }
-                        }
-                    }
-                    .navigationTitle("MailKit")
-                    .toolbar {
-                        ToolbarItem {
-                            Button("Settings", systemImage: "gearshape") { showingSettings = true }
-                        }
-                    }
-                    .refreshable { await refreshAccounts() }
-                } content: {
-                    MessageListView(draft: $draft, addingAccount: $addingAccount, showingSettings: $showingSettings)
-                } detail: {
-                    if let message = store.selectedMessage {
-                        MessageDetailView(message: message, draft: $draft)
-                    } else {
-                        ContentUnavailableView("Select a message", systemImage: "envelope.open", description: Text("Choose a mailbox to read, organize, or reply to mail."))
-                    }
-                }
+                mailNavigation
                 .safeAreaInset(edge: .bottom, spacing: 0) {
                     if store.busy {
                         HStack {
@@ -106,8 +48,56 @@ struct MailRootView: View {
         }
     }
 
-    private func refreshAccounts() async {
-        do { try await store.loadAccounts() } catch { store.error = error.localizedDescription }
+    @ViewBuilder private var mailNavigation: some View {
+        #if os(macOS)
+        NavigationSplitView {
+            mailboxSidebar
+                .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 260)
+        } detail: {
+            MacMessagePane(draft: $draft, addingAccount: $addingAccount, showingSettings: $showingSettings)
+        }
+        .navigationSplitViewStyle(.prominentDetail)
+        #else
+        NavigationSplitView(preferredCompactColumn: $preferredCompactColumn) {
+            mailboxSidebar
+        } content: {
+            MessageListView(draft: $draft, addingAccount: $addingAccount, showingSettings: $showingSettings)
+        } detail: {
+            messageDetail
+        }
+        #endif
+    }
+
+    private var mailboxSidebar: some View {
+        List(selection: Binding(get: { store.selectedFolder?.id }, set: { id in
+            if let folder = store.mailboxes.first(where: { $0.id == id }) {
+                preferredCompactColumn = .content
+                store.perform { try await store.selectFolder(folder) }
+            }
+        })) {
+            Section("Mailboxes") {
+                ForEach(MailFolder.railOrdered(store.mailboxes.filter(\.selectable))) { folder in
+                    NavigationLink(value: folder.id) {
+                        HStack {
+                            Label(folder.railTitle, systemImage: folderIcon(folder.role))
+                            Spacer()
+                            if let unseen = folder.unseen, unseen > 0 {
+                                Text(unseen.formatted()).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }.disabled(store.busy)
+                }
+            }
+        }
+        .navigationTitle("Mailboxes")
+    }
+
+    @ViewBuilder private var messageDetail: some View {
+        if let message = store.selectedMessage {
+            MessageDetailView(message: message, draft: $draft)
+        } else {
+            ContentUnavailableView("Select a message", systemImage: "envelope.open", description: Text("Choose a mailbox to read, organize, or reply to mail."))
+        }
     }
 }
 
@@ -267,6 +257,7 @@ private struct MailboxRails: View {
                 .padding(.vertical, 6)
             }
 
+            #if !os(macOS)
             if store.selectedAccount != nil {
                 Divider()
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -303,6 +294,7 @@ private struct MailboxRails: View {
                 }
                 .id(store.selectedAccount?.id)
             }
+            #endif
 
             Divider()
             HStack {
@@ -393,12 +385,12 @@ private struct MessageDetailView: View {
             .textSelection(.enabled)
             .padding()
             Divider()
-            if let text = message.bodyText, !text.isEmpty {
+            if let html = message.renderableHTML {
+                SafeMailHTML(html: html)
+            } else if let text = message.bodyText, !text.isEmpty {
                 ScrollView {
                     Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding()
                 }
-            } else if let html = message.bodyHTML, !html.isEmpty {
-                SafeMailHTML(html: html)
             } else {
                 ScrollView { Text(message.snippet.isEmpty ? "This message has no readable body." : message.snippet).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding() }
             }
@@ -433,6 +425,28 @@ private struct MessageDetailView: View {
         .disabled(store.busy)
     }
 }
+
+#if os(macOS)
+private struct MacMessagePane: View {
+    @Environment(MailStore.self) private var store
+    @Binding var draft: ComposeDraft?
+    @Binding var addingAccount: Bool
+    @Binding var showingSettings: Bool
+
+    var body: some View {
+        if let message = store.selectedMessage {
+            MessageDetailView(message: message, draft: $draft)
+                .toolbar {
+                    ToolbarItem(placement: .navigation) {
+                        Button("Messages", systemImage: "chevron.left") { store.selectedMessage = nil }
+                    }
+                }
+        } else {
+            MessageListView(draft: $draft, addingAccount: $addingAccount, showingSettings: $showingSettings)
+        }
+    }
+}
+#endif
 
 private struct ComposeDraft: Identifiable {
     let id = UUID()
@@ -787,7 +801,7 @@ private struct SafeMailHTML {
         view.loadHTMLString("""
         <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-        <style>:root{color-scheme:light dark}body{font:17px -apple-system,BlinkMacSystemFont,sans-serif;overflow-wrap:anywhere;padding:12px}img,table{max-width:100%}pre{white-space:pre-wrap}</style></head><body>\(html)</body></html>
+        <style>html,body{margin:0;padding:0;max-width:100%;overflow-wrap:anywhere}img,table{max-width:100%!important}img{height:auto!important}pre{white-space:pre-wrap}</style></head><body>\(html)</body></html>
         """, baseURL: nil)
     }
 

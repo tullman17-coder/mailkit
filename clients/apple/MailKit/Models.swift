@@ -75,6 +75,11 @@ struct MailMessage: Decodable, Identifiable, Hashable {
     }
 
     var displayDate: String { timestamp?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date" }
+
+    var renderableHTML: String? {
+        guard let bodyHTML, !bodyHTML.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return bodyHTML
+    }
 }
 
 enum MessageFilter: String, CaseIterable {
