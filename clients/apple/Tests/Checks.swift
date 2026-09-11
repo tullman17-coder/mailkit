@@ -26,6 +26,15 @@ struct Checks {
         let message = try JSONDecoder().decode(MailMessage.self, from: Data(fixture.utf8))
         assert(message.accountID == "work" && message.nativeID == "42" && message.bodyText == "Body")
         assert(message.from.first?.display == "Sender <sender@example.com>")
+        for (payload, verified) in [
+            (#"{"ok":true,"mailboxes":["INBOX"]}"#, false),
+            (#"{"ok":true,"imap":true,"smtp":false}"#, false),
+            (#"{"ok":true,"smtp":true}"#, false),
+            (#"{"ok":true,"imap":true,"smtp":true}"#, true)
+        ] {
+            let result = try JSONDecoder().decode(AccountConnectionTest.self, from: Data(payload.utf8))
+            assert(result.summary.contains("authentication succeeded") == verified)
+        }
         if CommandLine.arguments.count > 1 {
             let api = MailAPI(base: try EngineAddress.parse(CommandLine.arguments[1]), token: "local-fixture-token")
             let accounts: [MailAccount] = try await api.request(["accounts"])
@@ -42,6 +51,6 @@ struct Checks {
             let echoed: MailAccount = try await api.request(["echo", "work+test@example.com"], query: ["mailbox": "Saved & receipts/2026"], method: "POST", body: ["name": "Example"])
             assert(echoed.id == "work+test@example.com")
         }
-        print("Apple checks passed: secure URLs, ten providers + custom, TLS modes, API decoding.")
+        print("Apple checks passed: secure URLs, ten providers + custom, TLS modes, API decoding, connection-test compatibility.")
     }
 }

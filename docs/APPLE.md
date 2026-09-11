@@ -21,8 +21,9 @@ engine. On a physical iPhone, loopback means the phone itself.
 Run the updated engine behind a TLS reverse proxy on a host you control. Keep its
 HTTP listener on `127.0.0.1`. For example, a Caddy site with your actual DNS name
 can use `reverse_proxy 127.0.0.1:8765`. Preserve the Authorization header and
-disable caching and request-body logging. A private Tailscale HTTPS endpoint can
-also work when every testing device belongs to that tailnet.
+disable caching and request-body logging. For this deployment, use NetBird to
+reach a private HTTPS listener; each testing device must join the NetBird network.
+The VPN does not replace the app's HTTPS certificate validation or bearer token.
 
 Existing configurations that deliberately bound HTTP to `0.0.0.0` with
 `allow_remote=true` need to migrate to loopback plus HTTPS before upgrading. The
@@ -119,7 +120,12 @@ recipients and explicit authorization. Do not advertise unverified provider
 connections as working.
 
 App Store Connect needs an app record with this bundle ID, under the selected
-team, and an authenticated user with upload access. In Xcode Organizer, choose
+team, and an authenticated user with upload access. The record **MailKit by
+Zermo**, Apple ID **6810880847**, was created under this team on September 10,
+2026. Version **0.2.0 (1)** was uploaded successfully through Xcode as
+**TestFlight Internal Only** that evening. Apple processing and assignment to an
+internal tester group still need to be confirmed in App Store Connect.
+In Xcode Organizer, choose
 the archive → **Distribute App → App Store Connect → Upload**. After Apple
 processes it, add the build to your internal TestFlight group and include your
 own Apple account as a tester. External testers may require Beta App Review.

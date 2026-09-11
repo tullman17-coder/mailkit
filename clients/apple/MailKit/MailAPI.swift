@@ -45,6 +45,14 @@ struct MailAPI {
 }
 
 private struct Ignored: Decodable {}
+struct AccountConnectionTest: Decodable {
+    let imap, smtp: Bool?
+    var summary: String {
+        imap == true && smtp == true
+            ? "Incoming and outgoing authentication succeeded. No email was sent."
+            : "The engine completed its check, but did not confirm both IMAP and SMTP authentication. Update the engine to verify both connections. No email was sent."
+    }
+}
 private struct SavedConnection: Codable { let url, token: String }
 
 @MainActor
@@ -226,8 +234,8 @@ final class MailStore {
     }
 
     func testAccount(_ account: MailAccount) async throws -> String {
-        let _: Ignored = try await client().request(["accounts", account.id, "test"], method: "POST", body: [:])
-        return "Incoming and outgoing authentication succeeded. No email was sent."
+        let result: AccountConnectionTest = try await client().request(["accounts", account.id, "test"], method: "POST", body: [:])
+        return result.summary
     }
     func removeAccount(_ account: MailAccount) async throws {
         let _: Ignored = try await client().request(["accounts", account.id], method: "DELETE")
