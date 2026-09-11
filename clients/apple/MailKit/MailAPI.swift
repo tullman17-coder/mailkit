@@ -93,8 +93,10 @@ final class MailStore {
     var engineURL = ""
     var apiToken = ""
     var searchText = ""
+    var messageFilter: MessageFilter = .all
     private var api: MailAPI?
     private var generation = UUID()
+    private var messageRequest = UUID()
     private let webAuth = BrowserSignIn()
 
     init() {
@@ -171,11 +173,27 @@ final class MailStore {
     func loadMessages() async throws {
         guard let account = selectedAccount, let folder = selectedFolder else { return }
         let stamp = generation
+        let request = UUID()
+        messageRequest = request
         let search = searchText
-        // ponytail: latest 100 messages per folder; add cursor pagination when older-mail browsing is required.
-        let rows: [MailMessage] = try await client().request(["messages"], query: ["account": account.id, "mailbox": folder.name, "query": search, "limit": "100"])
-        guard stamp == generation, selectedAccount?.id == account.id, selectedFolder?.id == folder.id, search == searchText else { return }
+        let filter = messageFilter
+        // ponytail: sort the latest 100 matches; add cursor pagination for older-mail browsing.
+        var query = ["account": account.id, "mailbox": folder.name, "query": search, "limit": "100"]
+        query.merge(filter.query) { _, new in new }
+        let rows: [MailMessage] = try await client().request(["messages"], query: query)
+        guard stamp == generation, request == messageRequest,
+              selectedAccount?.id == account.id, selectedFolder?.id == folder.id,
+              search == searchText, filter == messageFilter else { return }
         messages = rows
+        if let selected = selectedMessage, !rows.contains(where: { $0.id == selected.id }) {
+            selectedMessage = nil
+        }
+    }
+
+    func setMessageFilter(_ filter: MessageFilter) async throws {
+        messageFilter = filter
+        messages = []; selectedMessage = nil
+        try await loadMessages()
     }
 
     func openMessage(_ message: MailMessage) async throws {

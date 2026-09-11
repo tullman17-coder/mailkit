@@ -3,7 +3,7 @@
 Open `clients/apple/MailKit.xcodeproj` in Xcode and select the shared **MailKit** scheme.
 One SwiftUI target supports iPhone/iPad on iOS 17+ and native Mac on macOS 14+.
 Bundle ID: `org.zermo.mailkit`. Selected team: **ZERMO BRANDS LLC — FMYLGYWYXW**.
-Version: **0.2.0 (1)**.
+Version: **0.2.0 (2)**.
 
 These are clients of the existing MailKit engine. Python, IMAP/SMTP connections,
 mail credentials, indexing, and routing rules run on your Mac or server. iOS does
@@ -27,8 +27,7 @@ The VPN does not replace the app's HTTPS certificate validation or bearer token.
 
 Existing configurations that deliberately bound HTTP to `0.0.0.0` with
 `allow_remote=true` need to migrate to loopback plus HTTPS before upgrading. The
-updated server rejects a non-loopback plaintext listener. The existing deployed
-engine and its configuration were not changed during this work.
+updated server rejects a non-loopback plaintext listener. Keep the engine configuration and provider credentials on that host.
 
 Add an account through Settings. Password accounts authenticate against both
 IMAP and SMTP before the app saves them. Each account can use distinct outgoing
@@ -69,8 +68,14 @@ accounts, and create account-scoped subject routing rules with tag/move actions.
 HTML bodies disable scripts, remote resources, embedded navigation, and persistent
 web storage. Link taps open externally. Plain text uses native selectable text.
 
-The message list shows up to 100 matching recent messages; search operates on the
-mail server. Refresh is explicit. There is no APNs/background sync, durable offline
+The message list defaults to newest date first, with visible date, sender A–Z,
+and subject A–Z sorting. Dates are compared as timestamps across time zones;
+missing sender dates fall back to the received date, and unknown dates sort last.
+Unread, flagged, and combined filters run on the mail server before selecting the
+latest 100 matching messages. Sorting applies to those loaded matches; the list
+shows that scope explicitly. Search also operates on the mail server. The engine
+restores requested UID order after FETCH replies, including across batches.
+Refresh is explicit. There is no APNs/background sync, durable offline
 mail cache, attachment downloading/uploading, or persisted local compose draft in
 this first native version. Compose protects against accidental sheet dismissal;
 SMTP delivery is never automatically retried. These limits are not hidden behind
@@ -95,7 +100,9 @@ xcodebuild -project clients/apple/MailKit.xcodeproj -scheme MailKit \
 The Swift check compiles with strict concurrency warnings as errors and tests
 encrypted endpoint validation, provider/TLS configuration, JSON decoding, request
 encoding, provider-versus-engine authentication errors, and refused redirects
-against a local fixture. No real mailbox or email delivery is involved.
+against a local fixture, plus sorting across time zones, fractional seconds,
+missing dates, stable ties, and filter query construction. No real mailbox or
+email delivery is involved.
 
 ## Signed iOS archive and TestFlight
 

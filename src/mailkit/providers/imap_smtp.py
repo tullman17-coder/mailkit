@@ -204,7 +204,9 @@ class ImapSmtpProvider(BaseProvider):
             if not data:
                 continue
             messages.extend(self._parse_fetch(mailbox, uidvalidity, data, peek=peek))
-        return messages
+        # IMAP may return a FETCH set in any order, including across chunks.
+        by_uid = {message.uid: message for message in messages}
+        return [by_uid[uid] for uid in uids if uid in by_uid]
 
     def _parse_fetch(self, mailbox: str, uidvalidity: int, data, *, peek: bool) -> list[Message]:
         out: list[Message] = []
@@ -252,7 +254,7 @@ class ImapSmtpProvider(BaseProvider):
         criteria = _imap_criteria(query)
         limit = int(query.get("limit") or 50)
         uids = self._search_uids(mailbox, criteria)
-        uids = list(reversed(uids))[:limit]
+        uids = sorted(uids, reverse=True)[:limit]
         messages = self._fetch_summaries(mailbox, uids, peek=True)
         if self.store:
             for msg in messages:

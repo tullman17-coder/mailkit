@@ -20,11 +20,77 @@ struct MailMessage: Decodable, Identifiable, Hashable {
     let id, accountID, nativeID, mailbox, subject, date, snippet: String
     let from, to, replyTo: [MailAddress]
     let bodyText, bodyHTML: String?
+    let internalDate: String?
     let unread, flagged, hasAttachments: Bool
     enum CodingKeys: String, CodingKey {
         case id, mailbox, subject, date, snippet, from, to, unread, flagged
         case accountID = "account_id", nativeID = "native_id", replyTo = "reply_to"
         case bodyText = "body_text", bodyHTML = "body_html", hasAttachments = "has_attachments"
+        case internalDate = "internal_date"
+    }
+
+    var timestamp: Date? {
+        for fractional in [false, true] {
+            if let value = try? Date(date, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: fractional)) { return value }
+        }
+        // A missing/invalid sender date falls back to the server's received date.
+        guard let internalDate else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "d-MMM-yyyy HH:mm:ss Z"
+        return formatter.date(from: internalDate.trimmingCharacters(in: .whitespaces))
+    }
+
+    var displayDate: String { timestamp?.formatted(date: .abbreviated, time: .shortened) ?? "Unknown date" }
+}
+
+enum MessageFilter: String, CaseIterable {
+    case all, unread, flagged, unreadAndFlagged
+    var title: String {
+        switch self {
+        case .all: "All mail"
+        case .unread: "Unread"
+        case .flagged: "Flagged"
+        case .unreadAndFlagged: "Unread & flagged"
+        }
+    }
+    var query: [String: String] {
+        var values: [String: String] = [:]
+        if self == .unread || self == .unreadAndFlagged { values["unread"] = "true" }
+        if self == .flagged || self == .unreadAndFlagged { values["flagged"] = "true" }
+        return values
+    }
+}
+
+enum MessageSort: String, CaseIterable {
+    case newest, oldest, sender, subject
+    var title: String {
+        switch self {
+        case .newest: "Newest first"
+        case .oldest: "Oldest first"
+        case .sender: "Sender A–Z"
+        case .subject: "Subject A–Z"
+        }
+    }
+    func apply(to messages: [MailMessage]) -> [MailMessage] {
+        // Parse once per message, not once per comparison. Undated mail always goes last.
+        messages.map { (message: $0, date: $0.timestamp) }.sorted { left, right in
+            let a = left.message, b = right.message
+            if self == .sender || self == .subject {
+                let first = self == .sender ? a.from.map(\.display).joined(separator: ", ") : a.subject
+                let second = self == .sender ? b.from.map(\.display).joined(separator: ", ") : b.subject
+                let order = first.localizedStandardCompare(second)
+                if order != .orderedSame { return order == .orderedAscending }
+            }
+            if let first = left.date, let second = right.date, first != second {
+                return self == .oldest ? first < second : first > second
+            }
+            if (left.date == nil) != (right.date == nil) { return right.date == nil }
+            if let first = UInt64(a.nativeID), let second = UInt64(b.nativeID), first != second {
+                return self == .oldest ? first < second : first > second
+            }
+            return a.id < b.id
+        }.map(\.message)
     }
 }
 

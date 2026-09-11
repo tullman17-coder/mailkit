@@ -155,6 +155,7 @@ private struct ConnectionView: View {
 private struct MessageListView: View {
     @Environment(MailStore.self) private var store
     @Binding var draft: ComposeDraft?
+    @AppStorage("mailkit.messageSort") private var sortOrder: MessageSort = .newest
 
     var body: some View {
         @Bindable var store = store
@@ -163,7 +164,7 @@ private struct MessageListView: View {
                 store.perform { try await store.openMessage(message) }
             }
         })) {
-            ForEach(store.messages) { message in
+            ForEach(sortOrder.apply(to: store.messages)) { message in
                 NavigationLink(value: message.id) {
                     HStack(alignment: .top, spacing: 10) {
                         Circle().fill(message.unread ? Color.accentColor : .clear).frame(width: 7, height: 7).padding(.top, 7)
@@ -176,11 +177,11 @@ private struct MessageListView: View {
                             }
                             Text(message.subject.isEmpty ? "(No subject)" : message.subject).font(.subheadline).lineLimit(1)
                             Text(message.snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            if !message.date.isEmpty { Text(message.date).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                            Text(message.displayDate).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
                     .padding(.vertical, 4)
-                    .accessibilityLabel("\(message.unread ? "Unread. " : "")\(message.from.map(\.display).joined(separator: ", ")). \(message.subject). \(message.snippet)")
+                    .accessibilityLabel("\(message.unread ? "Unread. " : "")\(message.flagged ? "Flagged. " : "")\(message.from.map(\.display).joined(separator: ", ")). \(message.subject). \(message.displayDate). \(message.snippet)")
                 }
                 .swipeActions(edge: .trailing) {
                     Button(message.flagged ? "Unflag" : "Flag", systemImage: message.flagged ? "flag.slash" : "flag") {
@@ -195,14 +196,44 @@ private struct MessageListView: View {
                 .disabled(store.busy)
             }
             if !store.messages.isEmpty {
-                Text("Showing up to 100 recent messages. Search this mailbox to find older mail.")
+                Text("\(store.messages.count) messages · \(sortOrder.title). Sorting the latest 100 matches. Filters and search check the whole mailbox.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack {
+                Menu {
+                    Picker("Filter messages", selection: Binding(get: { store.messageFilter }, set: { filter in
+                        store.perform { try await store.setMessageFilter(filter) }
+                    })) {
+                        ForEach(MessageFilter.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                } label: {
+                    Label(store.messageFilter.title, systemImage: store.messageFilter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                }
+                .accessibilityLabel("Filter messages")
+                .accessibilityValue(store.messageFilter.title)
+                Spacer(minLength: 12)
+                Menu {
+                    Picker("Sort messages", selection: $sortOrder) {
+                        ForEach(MessageSort.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                } label: {
+                    Label(sortOrder.title, systemImage: "arrow.up.arrow.down")
+                }
+                .accessibilityLabel("Sort messages")
+                .accessibilityValue(sortOrder.title)
+            }
+            .font(.subheadline)
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            .background(.bar)
+            .disabled(store.busy || store.selectedFolder == nil)
         }
         .overlay {
             if store.messages.isEmpty {
                 if store.busy { ProgressView("Loading mail…") }
-                else { ContentUnavailableView(store.selectedFolder == nil ? "Choose a mailbox" : "No messages", systemImage: "tray", description: Text(store.selectedFolder == nil ? "Add or select an account to see its mailboxes." : "Refresh to check for mail, or change your search.")) }
+                else { ContentUnavailableView(store.selectedFolder == nil ? "Choose a mailbox" : "No matching messages", systemImage: "tray", description: Text(store.selectedFolder == nil ? "Add or select an account to see its mailboxes." : "Try All mail in the filter menu, change your search, or refresh.")) }
             }
         }
         .navigationTitle(store.selectedFolder?.name ?? "Messages")
@@ -244,7 +275,7 @@ private struct MessageDetailView: View {
                 }
                 Text(message.from.map(\.display).joined(separator: ", ")).font(.subheadline.bold())
                 Text("To: \(message.to.map(\.display).joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
-                Text(message.date).font(.caption).foregroundStyle(.secondary)
+                Text(message.displayDate).font(.caption).foregroundStyle(.secondary)
                 if message.hasAttachments {
                     Label("Attachments are available in your provider’s app.", systemImage: "paperclip").font(.caption).foregroundStyle(.secondary)
                 }
