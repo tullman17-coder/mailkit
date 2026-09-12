@@ -1,10 +1,11 @@
+import plistlib
 from subprocess import CompletedProcess
 
 import pytest
 
 from mailkit.cli.install import LABEL, apply_os_service, unit_text
 from mailkit.errors import DaemonError
-from mailkit.service import daemon_spawn_cmd, frozen_dispatch_argv, spawn_background, spawn_generation
+from mailkit.service import clear_pid, daemon_spawn_cmd, frozen_dispatch_argv, spawn_background, spawn_generation
 
 
 def test_empty_argv_opens_ui():
@@ -73,37 +74,50 @@ def test_ensure_engine_waits_for_launchd_before_fallback_spawn(tmp_path, monkeyp
 
 def test_install_units_mark_frozen_children_as_daemon(tmp_path, monkeypatch):
     monkeypatch.setattr("sys.frozen", True, raising=False)
-    plist = unit_text("launchd", tmp_path)
-    assert "<string>-m</string>" not in plist
-    assert "MAILKIT_ROLE" in plist
+    plist = plistlib.loads(unit_text("launchd", tmp_path).encode())
+    assert "-m" not in plist["ProgramArguments"]
+    assert plist["EnvironmentVariables"]["MAILKIT_ROLE"] == "daemon"
+    assert plist["KeepAlive"] == {"SuccessfulExit": False}
     unit = unit_text("systemd", tmp_path)
     assert "MAILKIT_ROLE=daemon" in unit
     assert "-m mailkit" not in unit
 
 
-def test_install_reloads_changed_launch_agent(tmp_path, monkeypatch):
+def test_install_loads_launch_agent_once(tmp_path, monkeypatch):
     calls = []
+    loaded = False
     home = tmp_path / "home"
     plist = home / "Library" / "LaunchAgents" / f"{LABEL}.plist"
-    plist.parent.mkdir(parents=True)
-    plist.write_text("old", encoding="utf-8")
     monkeypatch.setattr("mailkit.cli.install.os.getuid", lambda: 501, raising=False)
 
     def runner(args, **kwargs):
+        nonlocal loaded
         calls.append(args)
+        if args[1] == "print":
+            return CompletedProcess(args, 0 if loaded else 1)
+        loaded = True
         return CompletedProcess(args, 0)
 
     result = apply_os_service(tmp_path, target="launchd", home=home, runner=runner)
 
-    assert result["changed"] is True
     assert result["loaded"] is True
     assert calls == [
         ["launchctl", "print", "gui/501/dev.mailkit.daemon"],
-        ["launchctl", "bootout", "gui/501/dev.mailkit.daemon"],
         ["launchctl", "bootstrap", "gui/501", str(plist)],
     ]
 
     calls.clear()
     unchanged = apply_os_service(tmp_path, target="launchd", home=home, runner=runner)
-    assert unchanged["changed"] is False
+    assert unchanged["loaded"] is True
     assert calls == [["launchctl", "print", "gui/501/dev.mailkit.daemon"]]
+
+
+def test_daemon_cleanup_preserves_newer_pid(tmp_path):
+    path = tmp_path / "mailkit.pid"
+    path.write_text("202", encoding="utf-8")
+
+    clear_pid(tmp_path, expected_pid=101)
+    assert path.read_text(encoding="utf-8") == "202"
+
+    clear_pid(tmp_path, expected_pid=202)
+    assert not path.exists()

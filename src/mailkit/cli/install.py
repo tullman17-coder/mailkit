@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import plistlib
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -14,56 +16,42 @@ LABEL = "dev.mailkit.daemon"
 
 
 def unit_text(target: str, root: Path) -> str:
-    exe = sys.executable
-    home = root
+    exe = str(sys.executable)
+    home = str(root)
     logs = log_dir(root)
     frozen = bool(getattr(sys, "frozen", False))
     if frozen:
-        prog_args = f"""    <string>{exe}</string>
-    <string>service</string>
-    <string>run</string>"""
+        prog_args = [exe, "service", "run"]
     else:
-        prog_args = f"""    <string>{exe}</string>
-    <string>-m</string>
-    <string>mailkit</string>
-    <string>service</string>
-    <string>run</string>"""
+        prog_args = [exe, "-m", "mailkit", "service", "run"]
     if target == "launchd":
-        return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>{LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-{prog_args}
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>MAILKIT_HOME</key><string>{home}</string>
-    <key>MAILKIT_ROLE</key><string>daemon</string>
-  </dict>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>{logs / "launchd.out.log"}</string>
-  <key>StandardErrorPath</key><string>{logs / "launchd.err.log"}</string>
-</dict>
-</plist>
-"""
-    exec_start = f"{exe} service run" if frozen else f"{exe} -m mailkit service run"
+        return plistlib.dumps(
+            {
+                "Label": LABEL,
+                "ProgramArguments": prog_args,
+                "EnvironmentVariables": {"MAILKIT_HOME": home, "MAILKIT_ROLE": "daemon"},
+                "RunAtLoad": True,
+                "KeepAlive": {"SuccessfulExit": False},
+                "StandardOutPath": str(logs / "launchd.out.log"),
+                "StandardErrorPath": str(logs / "launchd.err.log"),
+            },
+            fmt=plistlib.FMT_XML,
+            sort_keys=False,
+        ).decode("utf-8")
+    exec_start = " ".join(shlex.quote(arg) for arg in prog_args)
     return f"""[Unit]
 Description=Mailkit local email engine
 After=network.target
 
 [Service]
 Type=simple
-Environment=MAILKIT_HOME={home}
+Environment=MAILKIT_HOME={shlex.quote(home)}
 Environment=MAILKIT_ROLE=daemon
 ExecStart={exec_start}
 Restart=on-failure
 RestartSec=5
-StandardOutput=append:{logs / "daemon.out.log"}
-StandardError=append:{logs / "daemon.err.log"}
+StandardOutput=append:{shlex.quote(str(logs / "daemon.out.log"))}
+StandardError=append:{shlex.quote(str(logs / "daemon.err.log"))}
 
 [Install]
 WantedBy=default.target
@@ -89,33 +77,25 @@ def apply_os_service(
     if target is None:
         target = "launchd" if sys.platform == "darwin" else "systemd"
     path = unit_path(target, home=home)
-    text = unit_text(target, root)
-    changed = not path.exists() or path.read_text(encoding="utf-8") != text
-    if changed:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    loaded = _activate(target, path, runner=runner, reload=changed) if activate else False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(unit_text(target, root), encoding="utf-8")
+    loaded = _activate(target, path, runner=runner) if activate else False
     return {
         "target": target,
         "path": str(path),
         "label": LABEL,
-        "changed": changed,
         "loaded": loaded,
         "activate": activate,
     }
 
 
-def _activate(target: str, path: Path, *, runner, reload: bool = False) -> bool:
+def _activate(target: str, path: Path, *, runner) -> bool:
     try:
         if target == "launchd":
             domain = f"gui/{os.getuid()}"
             spec = f"{domain}/{LABEL}"
             printed = runner(["launchctl", "print", spec], capture_output=True, text=True)
-            if reload and printed.returncode == 0:
-                removed = runner(["launchctl", "bootout", spec], capture_output=True, text=True)
-                if removed.returncode != 0:
-                    return False
-            if printed.returncode != 0 or reload:
+            if printed.returncode != 0:
                 boot = runner(["launchctl", "bootstrap", domain, str(path)], capture_output=True, text=True)
                 err = (boot.stderr or "") + (boot.stdout or "")
                 if boot.returncode != 0 and "already" not in err.lower():

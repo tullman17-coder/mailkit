@@ -12,7 +12,6 @@ from mailkit.errors import DaemonError
 from mailkit.logutil import get_logger
 from mailkit.paths import data_dir
 from mailkit.service import (
-    is_loopback_host,
     is_running,
     load_or_create_token,
     spawn_background,
@@ -57,10 +56,8 @@ def ensure_engine(root: Path | None = None) -> None:
         log.error("refusing nested engine spawn from a child process")
         return
     cfg = load_config(home)
-    if not cfg.daemon.auto_start or not is_loopback_host(cfg.daemon.host):
-        log.info("using remote engine %s:%s", cfg.daemon.host, cfg.daemon.port)
-        if not wait_until_api(home, timeout=8.0):
-            log.warning("remote engine not reachable")
+    if not cfg.daemon.auto_start:
+        log.info("local engine auto-start disabled")
         return
 
     ensure_os_service(home)

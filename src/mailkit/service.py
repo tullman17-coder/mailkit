@@ -78,10 +78,13 @@ def write_pid(root: Path | None = None) -> None:
     pid_path(root).write_text(str(os.getpid()))
 
 
-def clear_pid(root: Path | None = None) -> None:
+def clear_pid(root: Path | None = None, *, expected_pid: int | None = None) -> None:
     path = pid_path(root)
-    if path.exists():
-        path.unlink()
+    if not path.exists():
+        return
+    if expected_pid is not None and read_pid(root) != expected_pid:
+        return
+    path.unlink()
 
 
 def load_or_create_token(root: Path | None = None) -> str:
@@ -229,10 +232,6 @@ def api_health_url(root: Path | None = None) -> str:
     if host in {"0.0.0.0", "::", "[::]"}:
         host = "127.0.0.1"
     return f"http://{host}:{cfg.daemon.port}/v1/health"
-
-
-def is_loopback_host(host: str | None) -> bool:
-    return (host or "127.0.0.1") in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::", "[::]", ""}
 
 
 def wait_until_api(root: Path | None = None, timeout: float = 8.0) -> bool:
