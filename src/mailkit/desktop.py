@@ -11,7 +11,14 @@ from mailkit.config import load_config
 from mailkit.errors import DaemonError
 from mailkit.logutil import get_logger
 from mailkit.paths import data_dir
-from mailkit.service import is_running, load_or_create_token, spawn_background, spawn_generation
+from mailkit.service import (
+    is_loopback_host,
+    is_running,
+    load_or_create_token,
+    spawn_background,
+    spawn_generation,
+    wait_until_api,
+)
 
 log = get_logger("mailkit.desktop")
 
@@ -35,23 +42,38 @@ def desktop_dir() -> Path:
     raise SystemExit("Desktop UI not found. Expected desktop/index.html in the repo or app bundle.")
 
 
+def ensure_os_service(root: Path | None = None) -> None:
+    try:
+        from mailkit.cli.install import apply_os_service
+
+        apply_os_service(data_dir(root), activate=True)
+    except Exception as exc:
+        log.warning("os service install: %s", exc)
+
+
 def ensure_engine(root: Path | None = None) -> None:
     home = data_dir(root)
-    if is_running(home):
-        return
     if spawn_generation() >= 1:
         log.error("refusing nested engine spawn from a child process")
         return
-    log.info("starting engine for desktop")
-    try:
-        spawn_background(home)
-    except DaemonError as exc:
-        log.warning("engine spawn: %s", exc)
-    deadline = time.time() + 8
-    while time.time() < deadline:
-        if is_running(home):
-            return
-        time.sleep(0.15)
+    cfg = load_config(home)
+    if not cfg.daemon.auto_start or not is_loopback_host(cfg.daemon.host):
+        log.info("using remote engine %s:%s", cfg.daemon.host, cfg.daemon.port)
+        if not wait_until_api(home, timeout=8.0):
+            log.warning("remote engine not reachable")
+        return
+
+    ensure_os_service(home)
+    if wait_until_api(home, timeout=8.0):
+        return
+    if not is_running(home):
+        log.info("starting engine for desktop")
+        try:
+            spawn_background(home)
+        except DaemonError as exc:
+            log.warning("engine spawn: %s", exc)
+    if not wait_until_api(home, timeout=8.0):
+        log.warning("engine not reachable")
 
 
 def run_desktop(root: Path | None = None) -> int:

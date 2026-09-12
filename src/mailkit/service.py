@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from mailkit.errors import DaemonError
@@ -181,6 +182,10 @@ def daemon_spawn_cmd(executable: str, *, frozen: bool) -> list[str]:
 
 
 def spawn_background(root: Path | None = None) -> int:
+    from mailkit.config import load_config
+
+    if not load_config(root).daemon.auto_start:
+        raise DaemonError("auto_start is disabled; this machine is a client of a remote engine")
     if is_running(root):
         pid = read_pid(root)
         raise DaemonError(f"mailkit service already running (pid {pid})")
@@ -207,9 +212,37 @@ def spawn_background(root: Path | None = None) -> int:
         popen_kw["start_new_session"] = True
     proc = subprocess.Popen(cmd, **popen_kw)
     pid = proc.pid
-    # The child rewrites the pid file; wait briefly for it.
+    # The child rewrites the pid file; wait briefly for it, then the API.
     for _ in range(20):
         time.sleep(0.1)
         if is_running(root):
-            return read_pid(root) or pid
-    return pid
+            break
+    wait_until_api(root, timeout=8.0)
+    return read_pid(root) or pid
+
+
+def api_health_url(root: Path | None = None) -> str:
+    from mailkit.config import load_config
+
+    cfg = load_config(root)
+    host = cfg.daemon.host or "127.0.0.1"
+    if host in {"0.0.0.0", "::", "[::]"}:
+        host = "127.0.0.1"
+    return f"http://{host}:{cfg.daemon.port}/v1/health"
+
+
+def is_loopback_host(host: str | None) -> bool:
+    return (host or "127.0.0.1") in {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::", "[::]", ""}
+
+
+def wait_until_api(root: Path | None = None, timeout: float = 8.0) -> bool:
+    url = api_health_url(root)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=0.4) as response:
+                if getattr(response, "status", 200) == 200:
+                    return True
+        except Exception:
+            time.sleep(0.15)
+    return False

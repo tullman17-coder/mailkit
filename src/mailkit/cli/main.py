@@ -18,7 +18,7 @@ from mailkit.errors import ExitCode, MailkitError, UsageError
 from mailkit.ids import new_id
 from mailkit.paths import data_dir
 from mailkit.runtime import open_runtime
-from mailkit.service import is_running, read_pid, spawn_background, stop_daemon
+from mailkit.service import is_running, read_pid, spawn_background, stop_daemon, wait_until_api
 
 
 EPILOG = """
@@ -60,8 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     svc_sub.add_parser("status", help="show daemon and account watcher status")
     runp = svc_sub.add_parser("run", help="run the daemon in the foreground")
     runp.add_argument("--background-child", action="store_true", help=argparse.SUPPRESS)
-    inst = svc_sub.add_parser("install", help="print systemd user unit or launchd plist")
+    inst = svc_sub.add_parser("install", help="install and load the user service so the engine starts at login")
     inst.add_argument("--target", choices=["systemd", "launchd"], default=None)
+    inst.add_argument("--print", dest="print_unit", action="store_true", help="print the unit instead of installing it")
 
     # accounts
     acc = sub.add_parser("accounts", help="add, list, and remove partitioned accounts")
@@ -372,9 +373,32 @@ def _service(args, root, out, client: ApiClient) -> int:
         target = args.target
         if target is None:
             target = "launchd" if sys.platform == "darwin" else "systemd"
-        from mailkit.cli.install import unit_text
+        from mailkit.cli.install import apply_os_service, unit_text
 
-        sys.stdout.write(unit_text(target, root))
+        if args.print_unit:
+            sys.stdout.write(unit_text(target, root))
+            return 0
+        if not load_config(root).daemon.auto_start:
+            out.data(
+                {"status": "skipped", "reason": "auto_start=false"},
+                text="auto_start is disabled; not installing a local engine",
+            )
+            return 0
+        info = apply_os_service(root, target, activate=True)
+        if wait_until_api(root, timeout=8.0):
+            info["status"] = "running"
+            info["pid"] = read_pid(root)
+        elif not is_running(root):
+            try:
+                info["pid"] = spawn_background(root)
+                info["status"] = "started"
+            except Exception as exc:
+                info["status"] = "loaded" if info.get("loaded") else "installed"
+                info["warning"] = str(exc)
+        else:
+            info["status"] = "running"
+            info["pid"] = read_pid(root)
+        out.data(info, text=f"installed {info['path']} ({info.get('status')})")
         return 0
     return ExitCode.USAGE
 
