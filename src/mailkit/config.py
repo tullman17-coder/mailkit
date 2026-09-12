@@ -90,6 +90,7 @@ class DaemonSettings:
     json_logs: bool = False
     event_retention: int = 100_000
     allow_remote: bool = False
+    auto_start: bool = True
     doctor_interval: int = 60
     doctor_repair: bool = True
 

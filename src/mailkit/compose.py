@@ -25,8 +25,6 @@ def build_message(
     msg["To"] = ", ".join(to)
     if cc:
         msg["Cc"] = ", ".join(cc)
-    if bcc:
-        msg["Bcc"] = ", ".join(bcc)
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid()
@@ -37,6 +35,8 @@ def build_message(
     if extra_headers:
         for k, v in extra_headers.items():
             msg[k] = v
+    # Blind recipients belong only in the SMTP envelope, never in transmitted MIME.
+    del msg["Bcc"]
     if html:
         msg.set_content(body or "")
         msg.add_alternative(html, subtype="html")

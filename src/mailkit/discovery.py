@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from email.utils import parseaddr
 from typing import Callable
 
@@ -70,18 +70,17 @@ _reg(
     oauth_auth_url="https://accounts.google.com/o/oauth2/v2/auth",
     oauth_token_url="https://oauth2.googleapis.com/token",
     oauth_scopes=["https://mail.google.com/"],
-    notes=["App passwords work if IMAP is enabled. OAuth2 XOAUTH2 is preferred."],
+    notes=["Use registered Google OAuth with the mail.google.com scope. App passwords depend on account policy."],
 )
 _reg(
     "outlook.com",
     "hotmail.com",
     "live.com",
     "msn.com",
-    "office365.com",
     provider_id="graph",
     auth_hint="oauth2",
     imap_host="outlook.office365.com",
-    smtp_host="smtp.office365.com",
+    smtp_host="smtp-mail.outlook.com",
     oauth_auth_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     oauth_token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
     oauth_scopes=[
@@ -89,7 +88,12 @@ _reg(
         "https://outlook.office.com/SMTP.Send",
         "offline_access",
     ],
-    notes=["Microsoft Graph is used when Graph credentials are configured; IMAP IDLE is the fallback."],
+    notes=["Enable IMAP in Outlook.com settings. These OAuth scopes authorize IMAP/SMTP, not Microsoft Graph."],
+)
+WELL_KNOWN["office365.com"] = replace(
+    WELL_KNOWN["outlook.com"],
+    smtp_host="smtp.office365.com",
+    notes=["Your organization must permit IMAP and SMTP AUTH. These OAuth scopes authorize IMAP/SMTP, not Microsoft Graph."],
 )
 _reg(
     "yahoo.com",
@@ -99,7 +103,7 @@ _reg(
     auth_hint="app_password",
     imap_host="imap.mail.yahoo.com",
     smtp_host="smtp.mail.yahoo.com",
-    notes=["Yahoo requires an app password when 2FA is enabled."],
+    notes=["Generate a Yahoo app password for manual IMAP/SMTP sign-in."],
 )
 _reg(
     "icloud.com",
@@ -109,6 +113,20 @@ _reg(
     auth_hint="app_password",
     imap_host="imap.mail.me.com",
     smtp_host="smtp.mail.me.com",
+    notes=["Generate an Apple app-specific password. Use your full email address for SMTP."],
+)
+_reg(
+    "aol.com",
+    "aim.com",
+    "netscape.com",
+    provider_id="imap",
+    auth_hint="app_password",
+    imap_host="imap.aol.com",
+    smtp_host="smtp.aol.com",
+    smtp_port=465,
+    smtp_starttls=False,
+    smtp_tls=True,
+    notes=["Generate an AOL app password for manual IMAP/SMTP sign-in."],
 )
 _reg(
     "fastmail.com",
@@ -117,6 +135,52 @@ _reg(
     auth_hint="app_password",
     imap_host="imap.fastmail.com",
     smtp_host="smtp.fastmail.com",
+    notes=["An app password is required. Fastmail Basic plans do not include IMAP/SMTP."],
+)
+_reg(
+    "zoho.com",
+    "zohomail.com",
+    provider_id="imap",
+    auth_hint="password",
+    imap_host="imap.zoho.com",
+    smtp_host="smtp.zoho.com",
+    notes=["Enable IMAP; use an app password with 2FA. Check account settings for plan/datacenter-specific servers; paid organizations use imappro/smtppro."],
+)
+_reg(
+    "gmx.com",
+    provider_id="imap",
+    auth_hint="app_password",
+    imap_host="imap.gmx.com",
+    smtp_host="mail.gmx.com",
+    notes=["Enable IMAP in GMX settings and generate an app password. Regional GMX servers can differ."],
+)
+_reg(
+    "gmx.net",
+    "gmx.de",
+    provider_id="imap",
+    auth_hint="app_password",
+    imap_host="imap.gmx.net",
+    smtp_host="mail.gmx.net",
+    notes=["Enable IMAP in GMX settings and generate an app password."],
+)
+_reg(
+    "mail.com",
+    provider_id="imap",
+    auth_hint="password",
+    imap_host="imap.mail.com",
+    smtp_host="smtp.mail.com",
+    notes=["IMAP requires a mail.com Premium account; use an app password with 2FA."],
+)
+_reg(
+    "ionos.com",
+    provider_id="imap",
+    auth_hint="password",
+    imap_host="imap.ionos.com",
+    smtp_host="smtp.ionos.com",
+    smtp_port=465,
+    smtp_starttls=False,
+    smtp_tls=True,
+    notes=["Use your mailbox password. IONOS country-specific servers and hosted Exchange settings can differ."],
 )
 
 
@@ -186,7 +250,7 @@ def discover(
         out.notes = list(out.notes) + [f"MX for {domain} points at Google."]
         return out
     if "outlook.com" in mx_hosts or "protection.outlook.com" in mx_hosts:
-        spec = WELL_KNOWN["outlook.com"]
+        spec = WELL_KNOWN["office365.com"]
         out = Discovered(**{**spec.__dict__})
         out.source = "mx"
         out.notes = list(out.notes) + [f"MX for {domain} points at Microsoft 365."]

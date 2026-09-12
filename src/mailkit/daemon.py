@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import signal
 import threading
 import time
@@ -67,7 +68,7 @@ def run(root=None, *, foreground: bool = True) -> int:
         supervisor.stop_all()
         webhooks.stop()
         server.shutdown()
-        clear_pid(runtime.root)
+        clear_pid(runtime.root, expected_pid=os.getpid())
         runtime.close()
     return 0
 

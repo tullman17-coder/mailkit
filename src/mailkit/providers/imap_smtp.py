@@ -6,14 +6,15 @@ import imaplib
 import smtplib
 import ssl
 import threading
-from email.utils import make_msgid
+from contextlib import suppress
+from email.parser import BytesHeaderParser
 from typing import Any
 
 from mailkit.auth.password import PasswordAuth
 from mailkit.auth.xoauth2 import XOAuth2Auth
-from mailkit.backoff import TokenBucket, retry
+from mailkit.backoff import TokenBucket
 from mailkit.config import AccountConfig
-from mailkit.errors import AuthError, NetworkError, NotFoundError
+from mailkit.errors import AuthError, NetworkError, NotFoundError, ConfigError, UsageError, MailkitError
 from mailkit.folders import Mailbox, build_folder_map, parse_list_line
 from mailkit.imaputf7 import decode as utf7dec, encode as utf7enc
 from mailkit.logutil import get_logger
@@ -56,12 +57,14 @@ class ImapSmtpProvider(BaseProvider):
                     self._imap.noop()
                     return self._imap
                 except Exception:
-                    self._imap = None
+                    self.close()
+            self._require_tls(self.account.imap)
             host = self.account.imap.host
             port = self.account.imap.port
             if not host:
                 raise NetworkError(f"Account {self.account.id} has no IMAP host")
             timeout = self.account.imap.timeout
+            client = None
             try:
                 if self.account.imap.tls:
                     client: imaplib.IMAP4 = imaplib.IMAP4_SSL(host, port, ssl_context=_ssl_context(), timeout=timeout)
@@ -70,12 +73,17 @@ class ImapSmtpProvider(BaseProvider):
                     if self.account.imap.starttls:
                         client.starttls(ssl_context=_ssl_context())
             except Exception as exc:
+                if client is not None:
+                    with suppress(Exception):
+                        client.shutdown()
                 raise NetworkError(f"IMAP connect failed for {self.account.id}: {exc}") from exc
             try:
                 self._auth.prepare_imap(client, self.account, self.secrets)
-            except AuthError:
-                raise
             except Exception as exc:
+                with suppress(Exception):
+                    client.shutdown()
+                if isinstance(exc, AuthError):
+                    raise
                 raise AuthError(f"IMAP auth failed for {self.account.id}: {exc}") from exc
             try:
                 client.enable("UTF8=ACCEPT")
@@ -107,15 +115,17 @@ class ImapSmtpProvider(BaseProvider):
         return self.connect()
 
     def _quote(self, mailbox: str) -> str:
-        enc = utf7enc(mailbox)
+        if not isinstance(mailbox, str) or any(ord(c) < 32 for c in mailbox):
+            raise UsageError("Invalid mailbox name")
+        enc = mailbox if getattr(self._imap, "utf8_enabled", False) else utf7enc(mailbox)
         if enc.upper() == "INBOX":
             return "INBOX"
-        return f'"{enc}"'
+        return '"' + enc.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     def _select(self, mailbox: str, *, readonly: bool = True) -> int:
         client = self._client()
         name = mailbox or "INBOX"
-        typ, data = client.examine(self._quote(name)) if readonly else client.select(self._quote(name))
+        typ, data = client.select(self._quote(name), readonly=readonly)
         if typ != "OK":
             raise NotFoundError(f"Mailbox not found: {name}", details={"mailbox": name})
         uidvalidity = 0
@@ -147,7 +157,8 @@ class ImapSmtpProvider(BaseProvider):
                     continue
                 parsed = parse_list_line(line)
                 if parsed:
-                    parsed.name = utf7dec(parsed.name)
+                    if not getattr(client, "utf8_enabled", False):
+                        parsed.name = utf7dec(parsed.name)
                     parsed.account_id = self.account.id
                     boxes.append(parsed)
         if not boxes:
@@ -169,7 +180,7 @@ class ImapSmtpProvider(BaseProvider):
         except Exception:
             typ, data = client.uid("SEARCH", None, *criteria)
         if typ != "OK":
-            return []
+            raise NetworkError(f"IMAP SEARCH failed in {mailbox}")
         raw = data[0] or b""
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", "replace")
@@ -188,10 +199,14 @@ class ImapSmtpProvider(BaseProvider):
             seq = ",".join(str(u) for u in chunk)
             self.rate.consume()
             typ, data = client.uid("FETCH", seq, spec)
-            if typ != "OK" or not data:
+            if typ != "OK":
+                raise NetworkError(f"IMAP FETCH failed in {mailbox}")
+            if not data:
                 continue
             messages.extend(self._parse_fetch(mailbox, uidvalidity, data, peek=peek))
-        return messages
+        # IMAP may return a FETCH set in any order, including across chunks.
+        by_uid = {message.uid: message for message in messages}
+        return [by_uid[uid] for uid in uids if uid in by_uid]
 
     def _parse_fetch(self, mailbox: str, uidvalidity: int, data, *, peek: bool) -> list[Message]:
         out: list[Message] = []
@@ -239,7 +254,7 @@ class ImapSmtpProvider(BaseProvider):
         criteria = _imap_criteria(query)
         limit = int(query.get("limit") or 50)
         uids = self._search_uids(mailbox, criteria)
-        uids = list(reversed(uids))[:limit]
+        uids = sorted(uids, reverse=True)[:limit]
         messages = self._fetch_summaries(mailbox, uids, peek=True)
         if self.store:
             for msg in messages:
@@ -275,30 +290,37 @@ class ImapSmtpProvider(BaseProvider):
         self._select(mailbox, readonly=False)
         client = self._client()
         self.rate.consume()
-        try:
+        capabilities = {c.decode() if isinstance(c, bytes) else c for c in client.capabilities}
+        if "MOVE" in capabilities:
             typ, _ = client.uid("MOVE", str(native_id), self._quote(dest))
-            if typ == "OK":
-                return
-        except Exception:
-            pass
+            if typ != "OK":
+                raise NetworkError(f"IMAP MOVE to {dest} failed")
+            return
         typ, _ = client.uid("COPY", str(native_id), self._quote(dest))
         if typ != "OK":
             raise NetworkError(f"IMAP COPY to {dest} failed")
-        client.uid("STORE", str(native_id), "+FLAGS", r"(\Deleted)")
-        try:
-            client.expunge()
-        except Exception:
-            pass
+        typ, _ = client.uid("STORE", str(native_id), "+FLAGS", r"(\Deleted)")
+        if typ != "OK":
+            raise NetworkError("Message copied, but marking the source deleted failed")
+        if "UIDPLUS" in capabilities:
+            typ, _ = client.uid("EXPUNGE", str(native_id))
+            if typ != "OK":
+                raise NetworkError("Message copied and marked deleted, but removing the source failed")
+        # ponytail: without UIDPLUS, leave source marked deleted; global EXPUNGE risks unrelated mail.
 
     def set_flags(self, mailbox: str, native_id: str, add=None, remove=None) -> None:
         self._select(mailbox, readonly=False)
         client = self._client()
         if add:
             flags = " ".join(_flag_token(f) for f in add)
-            client.uid("STORE", str(native_id), "+FLAGS.SILENT", f"({flags})")
+            typ, _ = client.uid("STORE", str(native_id), "+FLAGS.SILENT", f"({flags})")
+            if typ != "OK":
+                raise NetworkError("Setting message flags failed")
         if remove:
             flags = " ".join(_flag_token(f) for f in remove)
-            client.uid("STORE", str(native_id), "-FLAGS.SILENT", f"({flags})")
+            typ, _ = client.uid("STORE", str(native_id), "-FLAGS.SILENT", f"({flags})")
+            if typ != "OK":
+                raise NetworkError("Removing message flags failed")
 
     def uidvalidity(self, mailbox: str) -> int:
         return self._uidvalidity.get(mailbox) or self._select(mailbox, readonly=True)
@@ -308,49 +330,87 @@ class ImapSmtpProvider(BaseProvider):
             return self._search_uids(mailbox, ["UID", f"{int(since_uid) + 1}:*"])
         return self._search_uids(mailbox, ["ALL"])
 
-    def send(self, from_addr: str, to: list[str], raw: bytes) -> str:
-        host = self.account.smtp.host
-        if not host:
+    @staticmethod
+    def _require_tls(settings) -> None:
+        if not (settings.tls or settings.starttls):
+            raise ConfigError("Mail authentication requires TLS or STARTTLS")
+
+    def _smtp_client(self) -> smtplib.SMTP:
+        settings = self.account.smtp
+        self._require_tls(settings)
+        if not settings.host:
             raise NetworkError(f"Account {self.account.id} has no SMTP host")
-        port = self.account.smtp.port
-        timeout = self.account.smtp.timeout
-
-        @retry(times=3, retry_on=(OSError, smtplib.SMTPException, NetworkError))
-        def _send() -> None:
-            if self.account.smtp.tls:
-                smtp: smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=timeout, context=_ssl_context())
-            else:
-                smtp = smtplib.SMTP(host, port, timeout=timeout)
-            try:
+        if settings.tls:
+            smtp = smtplib.SMTP_SSL(settings.host, settings.port, timeout=settings.timeout, context=_ssl_context())
+        else:
+            smtp = smtplib.SMTP(settings.host, settings.port, timeout=settings.timeout)
+        try:
+            smtp.ehlo()
+            if settings.starttls and not settings.tls:
+                smtp.starttls(context=_ssl_context())
                 smtp.ehlo()
-                if self.account.smtp.starttls and not self.account.smtp.tls:
-                    smtp.starttls(context=_ssl_context())
-                    smtp.ehlo()
-                self._auth.prepare_smtp(smtp, self.account, self.secrets)
-                smtp.sendmail(from_addr, to, raw)
-            finally:
-                try:
-                    smtp.quit()
-                except Exception:
-                    smtp.close()
+            self._auth.prepare_smtp(smtp, self.account, self.secrets)
+            if self.vault is not None:
+                self.vault.put_account(self.account.id, self.secrets)
+            return smtp
+        except Exception:
+            smtp.close()
+            raise
 
+    def test_connection(self) -> dict:
+        """Authenticate both protocols without sending a message."""
+        try:
+            boxes = self.list_mailboxes()
+            with self._smtp_client():
+                pass
+            return {"ok": True, "imap": True, "smtp": True, "mailboxes": [box.name for box in boxes]}
+        finally:
+            self.close()
+
+    def send(self, from_addr: str, to: list[str], raw: bytes) -> str:
+        # A failed SMTP DATA reply can mean accepted mail; do not retry and duplicate it.
+        message_id = BytesHeaderParser().parsebytes(raw).get("Message-ID", "")
         self.rate.consume()
-        _send()
-        return make_msgid()
+        smtp = self._smtp_client()
+        try:
+            refused = smtp.sendmail(from_addr, to, raw)
+        finally:
+            # QUIT cannot undo a completed DATA transaction or hide a partial refusal.
+            with suppress(smtplib.SMTPException, OSError):
+                smtp.quit()
+            with suppress(OSError):
+                smtp.close()
+        if refused:
+            accepted = [recipient for recipient in to if recipient not in refused]
+            raise MailkitError(
+                f"SMTP accepted this message for {', '.join(accepted)}; refused {', '.join(refused)}. "
+                "Resend only to refused recipients to avoid duplicate email.",
+                details={"message_id": message_id, "accepted_recipients": accepted,
+                         "refused_recipients": list(refused), "retry_safe": False},
+            )
+        return message_id
 
     def open_idle_client(self) -> imaplib.IMAP4:
         """Dedicated IMAP connection for IDLE so command traffic is not blocked."""
+        self._require_tls(self.account.imap)
         host = self.account.imap.host
         port = self.account.imap.port
         timeout = None  # IDLE must not use a short socket timeout
-        if self.account.imap.tls:
-            client: imaplib.IMAP4 = imaplib.IMAP4_SSL(host, port, ssl_context=_ssl_context(), timeout=timeout)
-        else:
-            client = imaplib.IMAP4(host, port, timeout=timeout)
-            if self.account.imap.starttls:
-                client.starttls(ssl_context=_ssl_context())
-        self._auth.prepare_imap(client, self.account, self.secrets)
-        return client
+        client = None
+        try:
+            if self.account.imap.tls:
+                client = imaplib.IMAP4_SSL(host, port, ssl_context=_ssl_context(), timeout=timeout)
+            else:
+                client = imaplib.IMAP4(host, port, timeout=timeout)
+                if self.account.imap.starttls:
+                    client.starttls(ssl_context=_ssl_context())
+            self._auth.prepare_imap(client, self.account, self.secrets)
+            return client
+        except Exception:
+            if client is not None:
+                with suppress(Exception):
+                    client.shutdown()
+            raise
 
 
 class ImapSmtpPlugin:

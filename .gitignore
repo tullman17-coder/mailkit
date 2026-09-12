@@ -7,6 +7,13 @@ __pycache__/
 dist/
 build/
 .venv/
+.venv-*/
+*.xcuserstate
+xcuserdata/
+*.xcarchive/
+*.ipa
+*.p12
+*.p8
 venv/
 .mailkit/
 *.enc

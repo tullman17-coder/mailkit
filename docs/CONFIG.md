@@ -50,3 +50,8 @@ sent = "Sent"
 Manual IMAP/SMTP fields override discovery. Discovery uses well-known provider maps, MX, then SRV `_imaps._tcp` / `_submission._tcp`, then `imap.` / `smtp.` guesses.
 
 OAuth `client_secret` belongs in the vault (`mailkit accounts add --client-secret ...`), not in config.
+
+Remote Apple clients require an HTTPS reverse proxy to the loopback API.
+`allow_remote=true` no longer enables a plaintext listener on a non-loopback
+address; migrate those installations to `host="127.0.0.1"` plus HTTPS before
+upgrading. See [Apple setup](APPLE.md).

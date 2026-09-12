@@ -16,8 +16,6 @@
 
 Mailkit talks **directly** to your existing Gmail, Outlook / Microsoft 365, Yahoo, and custom-domain IMAP/SMTP accounts. It does not host, proxy, or relay mail through a third party. Credentials stay in an encrypted vault on disk.
 
-Mailkit talks **directly** to your existing Gmail, Outlook / Microsoft 365, Yahoo, and custom-domain IMAP/SMTP accounts. It does not host, proxy, or relay mail through a third party. Credentials stay in an encrypted vault on disk.
-
 The product is:
 
 1. A long-running background **daemon** that keeps a live connection to every account
@@ -31,6 +29,11 @@ The product is:
 A graphical desktop app is a replaceable client. The engine remains the product.
 
 ## Quick start
+
+**Native Apple apps:** open [`clients/apple/MailKit.xcodeproj`](clients/apple/MailKit.xcodeproj)
+for the SwiftUI iPhone/iPad/Mac clients. They connect to your engine over HTTPS,
+with ten provider presets plus manual IMAP/SMTP. See [setup, limitations, and
+TestFlight](docs/APPLE.md) and [provider authentication requirements](docs/PROVIDERS.md).
 
 ```bash
 python3 -m pip install -e .
