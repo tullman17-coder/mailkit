@@ -50,6 +50,9 @@ struct MailRootView: View {
         .task { store.reconnectSavedEngine() }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { store.reconnectSavedEngine() }
+            #if os(iOS)
+            if phase == .background { MailBackgroundEngine.scheduleIfNeeded() }
+            #endif
         }
     }
 

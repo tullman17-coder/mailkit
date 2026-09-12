@@ -4,6 +4,10 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>org.zermo.mailkit.engine-refresh</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>MailKit</string>
 	<key>CFBundleExecutable</key>
@@ -46,6 +50,10 @@
 	<string>Connect to your own MailKit email engine on your local network.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

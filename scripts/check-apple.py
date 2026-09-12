@@ -3,6 +3,7 @@
 import http.server
 import json
 from pathlib import Path
+import plistlib
 import subprocess
 import threading
 import urllib.parse
@@ -49,6 +50,9 @@ class Fixture(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    info = plistlib.loads((root / 'clients/apple/MailKit/Info.plist').read_bytes())
+    assert info['BGTaskSchedulerPermittedIdentifiers'] == ['org.zermo.mailkit.engine-refresh']
+    assert info['UIBackgroundModes'] == ['fetch']
     (root / 'build').mkdir(exist_ok=True)
     binary = root / 'build/apple-checks'
     subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-strict-concurrency=complete', '-warnings-as-errors',

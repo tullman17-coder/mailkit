@@ -3,6 +3,13 @@ import SwiftUI
 @main
 struct MailKitApp: App {
     @State private var store = MailStore()
+
+    init() {
+        #if os(iOS)
+        MailBackgroundEngine.register()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             MailRootView()

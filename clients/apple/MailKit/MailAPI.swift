@@ -2,6 +2,9 @@ import AuthenticationServices
 import Foundation
 import Observation
 import Security
+#if os(iOS)
+import BackgroundTasks
+#endif
 
 private final class NoRedirects: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -67,7 +70,12 @@ private enum ConnectionKeychain {
     }
     static func save(_ connection: SavedConnection) throws {
         let data = try JSONEncoder().encode(connection)
-        let attrs: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        #if os(iOS)
+        let accessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        #else
+        let accessibility = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        #endif
+        let attrs: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: accessibility]
         var status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
         if status == errSecItemNotFound { status = SecItemAdd(query.merging(attrs) { _, new in new } as CFDictionary, nil) }
         guard status == errSecSuccess else { throw MailError(message: "Could not save the connection in Keychain (\(status)).") }
@@ -77,6 +85,56 @@ private enum ConnectionKeychain {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw MailError(message: "Could not remove the connection from Keychain (\(status)).") }
     }
 }
+
+#if os(iOS)
+enum MailBackgroundEngine {
+    static let taskIdentifier = "org.zermo.mailkit.engine-refresh"
+    private static let refreshDelay: TimeInterval = 15 * 60
+
+    @MainActor
+    static func register() {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: .main) { task in
+            MainActor.assumeIsolated {
+                guard let refreshTask = task as? BGAppRefreshTask else {
+                    task.setTaskCompleted(success: false)
+                    return
+                }
+                handle(refreshTask)
+            }
+        }
+    }
+
+    @MainActor
+    static func scheduleIfNeeded() {
+        guard ConnectionKeychain.read() != nil else { return }
+        let request = BGAppRefreshTaskRequest(identifier: taskIdentifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: refreshDelay)
+        try? BGTaskScheduler.shared.submit(request)
+    }
+
+    @MainActor
+    static func cancel() {
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: taskIdentifier)
+    }
+
+    @MainActor
+    private static func handle(_ task: BGAppRefreshTask) {
+        let work = Task { @MainActor in
+            guard let connection = ConnectionKeychain.read() else { return true }
+            scheduleIfNeeded()
+            do {
+                let api = MailAPI(base: try EngineAddress.parse(connection.url), token: connection.token)
+                let _: [MailAccount] = try await api.request(["accounts"])
+                return true
+            } catch {
+                return false
+            }
+        }
+        task.expirationHandler = { work.cancel() }
+        Task { @MainActor in task.setTaskCompleted(success: await work.value) }
+    }
+}
+#endif
 
 @MainActor
 @Observable
@@ -100,7 +158,13 @@ final class MailStore {
     private let webAuth = BrowserSignIn()
 
     init() {
-        if let saved = ConnectionKeychain.read() { engineURL = saved.url; apiToken = saved.token }
+        if let saved = ConnectionKeychain.read() {
+            engineURL = saved.url
+            apiToken = saved.token
+            #if os(iOS)
+            try? ConnectionKeychain.save(saved)
+            #endif
+        }
     }
 
     func perform(_ operation: @escaping @MainActor () async throws -> Void) {
@@ -143,15 +207,26 @@ final class MailStore {
     }
 
     func reconnectSavedEngine() {
-        guard !isConnected, !busy, !engineURL.isEmpty, !apiToken.isEmpty else { return }
+        guard !busy, !engineURL.isEmpty, !apiToken.isEmpty else { return }
         let savedURL = engineURL
         let savedToken = apiToken
-        perform { try await self.connect(url: savedURL, token: savedToken) }
+        perform {
+            do {
+                try await self.connect(url: savedURL, token: savedToken)
+            } catch {
+                self.api = nil
+                self.isConnected = false
+                throw error
+            }
+        }
     }
 
     func disconnect() {
         do { try ConnectionKeychain.delete() }
         catch { self.error = error.localizedDescription; return }
+        #if os(iOS)
+        MailBackgroundEngine.cancel()
+        #endif
         generation = UUID()
         webAuth.cancel()
         api = nil; apiToken = ""; isConnected = false
