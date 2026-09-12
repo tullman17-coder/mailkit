@@ -142,6 +142,13 @@ final class MailStore {
         }
     }
 
+    func reconnectSavedEngine() {
+        guard !isConnected, !busy, !engineURL.isEmpty, !apiToken.isEmpty else { return }
+        let savedURL = engineURL
+        let savedToken = apiToken
+        perform { try await self.connect(url: savedURL, token: savedToken) }
+    }
+
     func disconnect() {
         do { try ConnectionKeychain.delete() }
         catch { self.error = error.localizedDescription; return }

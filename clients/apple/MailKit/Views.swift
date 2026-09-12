@@ -6,6 +6,7 @@ private let mailAccent = Color(red: 0.55, green: 0.19, blue: 0.28)
 struct MailRootView: View {
     @Environment(MailStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
     @State private var addingAccount = false
     @State private var showingSettings = false
     @State private var draft: ComposeDraft?
@@ -45,6 +46,10 @@ struct MailRootView: View {
         .sheet(item: $draft) { ComposeView(draft: $0) }
         .onChange(of: store.isConnected) { _, connected in
             if connected { preferredCompactColumn = .content }
+        }
+        .task { store.reconnectSavedEngine() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { store.reconnectSavedEngine() }
         }
     }
 

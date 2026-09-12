@@ -3,7 +3,7 @@
 Open `clients/apple/MailKit.xcodeproj` in Xcode and select the shared **MailKit** scheme.
 One SwiftUI target supports iPhone/iPad on iOS 17+ and native Mac on macOS 14+.
 Bundle ID: `org.zermo.mailkit`. Selected team: **ZERMO BRANDS LLC — FMYLGYWYXW**.
-Version: **0.2.0 (4)**.
+Version: **0.2.0 (5)**.
 
 These are clients of the existing MailKit engine. Python, IMAP/SMTP connections,
 mail credentials, indexing, and routing rules run on your Mac or server. iOS does
@@ -80,7 +80,8 @@ Unread, flagged, and combined filters run on the mail server before selecting th
 latest 100 matching messages. Sorting applies to those loaded matches; the list
 shows that scope explicitly. Search also operates on the mail server. The engine
 restores requested UID order after FETCH replies, including across batches.
-Refresh is explicit. There is no APNs/background sync, durable offline
+The app reconnects to its saved engine when it launches or returns to the
+foreground. Refresh is explicit. There is no APNs/background sync, durable offline
 mail cache, attachment downloading/uploading, or persisted local compose draft in
 this first native version. Compose protects against accidental sheet dismissal;
 SMTP delivery is never automatically retried. These limits are not hidden behind
